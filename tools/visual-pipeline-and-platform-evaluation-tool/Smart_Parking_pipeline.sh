@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 VIDEO=${1:-/videos/input/metro_smart_parking.mp4}
-MAX_CHANNELS=${MAX_CHANNELS:-1}
+MAX_CHANNELS=${MAX_CHANNELS:-10}
 RESULT_FILE=${RESULT_FILE:-/output/SmartParking_results.txt}
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -144,6 +144,138 @@ channel() {
         queue !
         gvafpscounter starting-frame=100 !
         fakesink name=default_output_sink_${c} "
+    elif [ "$VARIANT" == "GPU_Opt" ]; then
+        echo "
+        filesrc location=${VIDEO} !
+        decodebin3 !
+        gvadetect
+            model=${MODEL1}
+            pre-process-backend=va-surface-sharing
+            device=GPU
+            ie-config=GPU_THROUGHPUT_STREAMS=2
+            batch-size=0
+            inference-region=full-frame
+            inference-interval=3
+            nireq=0
+            threshold=0.7
+            model-instance-id=instgpu-opt0-${c} !
+        queue !
+        gvatrack tracking-type=short-term-imageless !
+        queue !        
+        gvaclassify
+            batch-size=0
+            model=${MODEL2}
+            pre-process-backend=va-surface-sharing
+            device=GPU
+            ie-config=GPU_THROUGHPUT_STREAMS=2
+            inference-interval=3
+            inference-region=roi-list
+            nireq=0
+            model-instance-id=instgpu-opt1-${c} !
+        queue !
+        gvawatermark !
+        gvametaconvert add-empty-results=true !
+        queue !
+        gvafpscounter starting-frame=100 !
+        fakesink name=default_output_sink_${c} "
+    elif [ "$VARIANT" == "NPU_Opt" ]; then
+        echo "
+        filesrc location=${VIDEO} !
+        decodebin3 !
+        gvadetect
+            model=${MODEL1}
+            pre-process-backend=va
+            device=NPU
+            batch-size=1
+            inference-interval=3
+            inference-region=full-frame
+            nireq=2
+            threshold=0.7
+            model-instance-id=instnpu-opt0-${c} !
+        queue !
+        gvatrack tracking-type=short-term-imageless !
+        queue ! 
+        gvaclassify
+            model=${MODEL2}
+            pre-process-backend=va
+            device=NPU
+            inference-interval=3
+            inference-region=roi-list
+            batch-size=1
+            nireq=2
+            model-instance-id=instnpu-opt1-${c} !
+        queue !
+        gvawatermark !
+        gvametaconvert add-empty-results=true !
+        queue !
+        gvafpscounter starting-frame=100 !
+        fakesink name=default_output_sink_${c} "
+    elif [ "$VARIANT" == "GPU_NPU_Opt" ]; then
+        echo "
+        filesrc location=${VIDEO} !
+        decodebin3 !
+        gvadetect
+            model=${MODEL1}
+            pre-process-backend=va-surface-sharing
+            device=GPU
+            ie-config=GPU_THROUGHPUT_STREAMS=2
+            batch-size=0
+            inference-region=full-frame
+            inference-interval=3
+            nireq=0
+            threshold=0.7
+            model-instance-id=instgpu-npu-opt0-${c} !
+        queue !
+        gvatrack tracking-type=short-term-imageless !
+        queue ! 
+        gvaclassify
+            model=${MODEL2}
+            pre-process-backend=va
+            device=NPU
+            inference-interval=3
+            inference-region=roi-list
+            batch-size=1
+            nireq=2
+            model-instance-id=instgpu-npu-opt1-${c} !
+        queue !
+        gvawatermark !
+        gvametaconvert add-empty-results=true !
+        queue !
+        gvafpscounter starting-frame=100 !
+        fakesink name=default_output_sink_${c} "
+    elif [ "$VARIANT" == "NPU_GPU_Opt" ]; then
+        echo "
+        filesrc location=${VIDEO} !
+        decodebin3 !
+        gvadetect
+            model=${MODEL1}
+            pre-process-backend=va
+            device=GPU
+            batch-size=1
+            inference-region=full-frame
+            inference-interval=3
+            nireq=2
+            threshold=0.7
+            model-instance-id=instnpu-gpu-opt0-${c} !
+        queue !
+        gvatrack tracking-type=short-term-imageless !
+        queue ! 
+        gvaclassify
+            model=${MODEL2}
+            pre-process-backend=va-surface-sharing
+            device=GPU
+            ie-config=GPU_THROUGHPUT_STREAMS=2
+            inference-interval=3
+            inference-region=roi-list
+            batch-size=0
+            nireq=0
+            model-instance-id=instnpu-gpu-opt1-${c} !
+        queue !
+        gvawatermark !
+        gvametaconvert add-empty-results=true !
+        queue !
+        gvafpscounter starting-frame=100 !
+        fakesink name=default_output_sink_${c} "
     fi
 }
 
@@ -154,8 +286,7 @@ MODEL1="$(resolve_model_artifact "$MODEL1_REF" xml)"
 MODEL2_REF="colorcls2"
 MODEL2="$(resolve_model_artifact "$MODEL2_REF" xml)"
 
-#for variant in "CPU" "GPU" "NPU" "GPU_NPU"; do
-for variant in "GPU" "NPU" "GPU_NPU"; do
+for variant in "GPU" "NPU" "GPU_NPU" "GPU_Opt" "NPU_Opt" "GPU_NPU_Opt" "NPU_GPU_Opt"; do
 
     VARIANT=${variant}
 
@@ -170,7 +301,6 @@ for variant in "GPU" "NPU" "GPU_NPU"; do
     echo "========================================" | tee -a "${RESULT_FILE}"
     echo "Pipeline for ${VARIANT} variant of ${MODEL1_REF} + ${MODEL2_REF}:" | tee -a "${RESULT_FILE}"
     gst-launch-1.0 -e ${pipeline} | grep "overall" | grep "number-streams=${MAX_CHANNELS}" | tee -a "${RESULT_FILE}"
-#    gst-launch-1.0 -e ${pipeline} 
     
     kill -s SIGINT "${pid}"
     echo "" | tee -a "${RESULT_FILE}"
