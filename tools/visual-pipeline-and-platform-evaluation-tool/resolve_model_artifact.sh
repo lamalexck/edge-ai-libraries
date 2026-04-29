@@ -8,6 +8,7 @@ ARTIFACT_TYPE="${2:-xml}"
 MODEL_REF="${1:-}"
 
 declare -A MODEL_XML_PATHS=(
+    [colorcls2]="public/colorcls2/FP32/colorcls2.xml"
     [efficientnet-b0_INT8]="pipeline-zoo-models/efficientnet-b0_INT8/FP16-INT8/efficientnet-b0.xml"
     [mobilenet-v2-pytorch]="omz/mobilenet-v2-pytorch/FP16/mobilenet-v2-pytorch.xml"
     [resnet-50-tf_INT8]="pipeline-zoo-models/resnet-50-tf_INT8/resnet-50-tf_i8.xml"

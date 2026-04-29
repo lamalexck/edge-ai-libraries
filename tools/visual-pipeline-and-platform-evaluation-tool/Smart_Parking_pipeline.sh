@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 VIDEO=${1:-/videos/input/metro_smart_parking.mp4}
-MAX_CHANNELS=${MAX_CHANNELS:-10}
+MAX_CHANNELS=${MAX_CHANNELS:-1}
 RESULT_FILE=${RESULT_FILE:-/output/SmartParking_results.txt}
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -152,9 +152,11 @@ mkdir -p /output
 MODEL1_REF="yolo11s"
 MODEL1="$(resolve_model_artifact "$MODEL1_REF" xml)"
 MODEL2_REF="colorcls2"
-MODEL2="/models/output/public/colorcls2/colorcls2.xml"
+MODEL2="$(resolve_model_artifact "$MODEL2_REF" xml)"
 
-for variant in "CPU" "GPU" "NPU" "GPU_NPU"; do
+#for variant in "CPU" "GPU" "NPU" "GPU_NPU"; do
+for variant in "GPU" "NPU" "GPU_NPU"; do
+
     VARIANT=${variant}
 
     pipeline=""
@@ -162,13 +164,14 @@ for variant in "CPU" "GPU" "NPU" "GPU_NPU"; do
         pipeline+="$(channel "${c}")"
     done
 
-    python3 ./npu-monitor-tool.py -i 1000 --csv &
+    $(python3 ./npu-monitor-tool.py -i 1000 --csv) &
     pid=$!
 
     echo "========================================" | tee -a "${RESULT_FILE}"
     echo "Pipeline for ${VARIANT} variant of ${MODEL1_REF} + ${MODEL2_REF}:" | tee -a "${RESULT_FILE}"
     gst-launch-1.0 -e ${pipeline} | grep "overall" | grep "number-streams=${MAX_CHANNELS}" | tee -a "${RESULT_FILE}"
-
+#    gst-launch-1.0 -e ${pipeline} 
+    
     kill -s SIGINT "${pid}"
     echo "" | tee -a "${RESULT_FILE}"
 
