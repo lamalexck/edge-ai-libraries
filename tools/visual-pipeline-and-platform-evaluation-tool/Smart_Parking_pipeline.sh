@@ -250,7 +250,7 @@ channel() {
         gvadetect
             model=${MODEL1}
             pre-process-backend=va
-            device=GPU
+            device=NPU
             batch-size=1
             inference-region=full-frame
             inference-interval=3
@@ -286,7 +286,9 @@ MODEL1="$(resolve_model_artifact "$MODEL1_REF" xml)"
 MODEL2_REF="colorcls2"
 MODEL2="$(resolve_model_artifact "$MODEL2_REF" xml)"
 
-for variant in "GPU" "NPU" "GPU_NPU" "GPU_Opt" "NPU_Opt" "GPU_NPU_Opt" "NPU_GPU_Opt"; do
+#for variant in "GPU" "NPU" "GPU_NPU" "GPU_Opt" "NPU_Opt" "GPU_NPU_Opt" "NPU_GPU_Opt"; do
+#for variant in "GPU" "GPU_Opt" "NPU_Opt" "GPU_NPU_Opt" "NPU_GPU_Opt"; do
+for variant in "NPU_GPU_Opt"; do
 
     VARIANT=${variant}
 
