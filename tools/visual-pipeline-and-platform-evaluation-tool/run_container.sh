@@ -11,6 +11,7 @@ docker run -ti --rm \
     -v $(pwd)/SNVR_pipeline.sh:/home/dlstreamer/SNVR_pipeline.sh \
     -v $(pwd)/Goods_Detection_Classification_pipeline.sh:/home/dlstreamer/Goods_Detection_Classification_pipeline.sh \
     -v $(pwd)/Smart_Parking_pipeline.sh:/home/dlstreamer/Smart_Parking_pipeline.sh \
+    -v $(pwd)/License_Plate_Recognition_pipeline.sh:/home/dlstreamer/License_Plate_Recognition_pipeline.sh \
     -v $(pwd)/resolve_model_artifact.sh:/home/dlstreamer/resolve_model_artifact.sh \
     -v $(pwd)/../npu-monitor-tool/npu-monitor-tool.py:/home/dlstreamer/npu-monitor-tool.py \
     -v $(pwd)/shared/videos:/videos:ro \
