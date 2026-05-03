@@ -51,9 +51,16 @@ x-vippet: &vippet
     LIVE_STREAM_SERVER_PORT: ${LIVE_STREAM_SERVER_PORT:-8554}
     RTSPSRC_DEFAULT_LATENCY_MS: ${RTSPSRC_DEFAULT_LATENCY_MS:-100}
     METRICS_SERVICE_URL: ${METRICS_SERVICE_URL:-http://metrics-service:9090}
+<<<<<<< HEAD
     http_proxy: ${http_proxy}
     https_proxy: ${https_proxy}
     no_proxy: "${no_proxy:+${no_proxy},}mediamtx,metrics-service"
+=======
+#    http_proxy: ${http_proxy}
+#    https_proxy: ${https_proxy}
+#    no_proxy: "${no_proxy:+${no_proxy},}mediamtx,metrics-service,mqtt-broker"
+#    NO_PROXY: "${no_proxy:+${no_proxy},}mediamtx,metrics-service,mqtt-broker"
+>>>>>>> 4a6c4db ([ViPPET] Initial commit for slip-and-fall pipeline)
   device_cgroup_rules:
     # Broad access to USB devices is required to support a wide range of USB cameras.
     - 'c 189:* rmw'
@@ -198,6 +205,10 @@ services:
       - "8554:8554"     # RTSP
       - "8889:8889"     # WebRTC signaling/HTTP
       - "8189:8189/udp" # WebRTC/ICE UDP
+<<<<<<< HEAD
+=======
+    restart: on-failure:5
+>>>>>>> 4a6c4db ([ViPPET] Initial commit for slip-and-fall pipeline)
   onvif-discovery:
     image: docker.io/intel/vippet-onvif-discovery:${DOCKER_TAG}
     build:
@@ -245,3 +256,20 @@ services:
       http_proxy: ${http_proxy}
       https_proxy: ${https_proxy}
       no_proxy: ${no_proxy}
+<<<<<<< HEAD
+=======
+
+  mqtt-broker:
+    image: eclipse-mosquitto:2.0
+    hostname: mqtt-broker
+    container_name: mqtt-broker
+    environment:
+      http_proxy: ${http_proxy}
+      https_proxy: ${https_proxy}
+      no_proxy: "${no_proxy:+${no_proxy},}vippet"
+    ports:
+      - "1883:1883"
+    restart: on-failure:5
+    volumes:
+      - ./shared/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+>>>>>>> 4a6c4db ([ViPPET] Initial commit for slip-and-fall pipeline)

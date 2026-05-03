@@ -280,3 +280,36 @@
   extra_model_procs: []
   unsupported_devices: ""
   default: true
+<<<<<<< HEAD
+=======
+
+- name: yolo26s-pose
+  display_name: YOLO 26s Pose
+  source: public
+  type: detection
+  precisions:
+    - precision: FP32
+      model_path: public/yolo26s-pose/FP32/yolo26s-pose.xml
+      model_proc: ""
+    - precision: FP16
+      model_path: public/yolo26s-pose/FP16/yolo26s-pose.xml
+      model_proc: ""
+  extra_model_procs: []
+  unsupported_devices: ""
+  default: true
+
+- name: yolo11s-pose
+  display_name: YOLO 11s Pose
+  source: public
+  type: detection
+  precisions:
+    - precision: FP32
+      model_path: public/yolo11s-pose/FP32/yolo11s-pose.xml
+      model_proc: ""
+    - precision: FP16
+      model_path: public/yolo11s-pose/FP16/yolo11s-pose.xml
+      model_proc: ""
+  extra_model_procs: []
+  unsupported_devices: ""
+  default: true
+>>>>>>> 4a6c4db ([ViPPET] Initial commit for slip-and-fall pipeline)

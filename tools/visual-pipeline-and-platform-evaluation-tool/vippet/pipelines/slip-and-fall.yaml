@@ -1,0 +1,30 @@
+# Reference: This is the official reference for Smart Parking pipeline
+# https://github.com/open-edge-platform/edge-ai-suites/tree/main/metro-ai-suite/metro-vision-ai-app-recipe/smart-parking
+name: Slip and Fall Detection
+definition: >
+  Slip and Fall Detection is a classic physical security use case that detects fall events in real-time. It is particularly useful in environments such as elderly care facilities, hospitals, and public spaces to enhance safety and provide timely assistance. The pipeline utilizes pre-trained deep learning models to identify fall events and can be deployed on various hardware platforms for efficient processing.
+tags:
+  - Smart Cities
+thumbnail: images/slip-and-fall.png
+variants:
+  - name: GPU
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! video/x-raw\(memory:VAMemory\) !
+      gvadetect
+      model=/models/output/public/yolo26s-pose/FP16/yolo26s-pose.xml
+      pre-process-backend=va-surface-sharing
+      device=GPU
+      ie-config=GPU_THROUGHPUT_STREAMS=2
+      batch-size=0
+      nireq=0
+      inference-interval=3
+      inference-region=full-frame !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+
