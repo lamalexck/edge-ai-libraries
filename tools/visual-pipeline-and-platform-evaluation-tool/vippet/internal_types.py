@@ -141,10 +141,12 @@ class InternalMetadataMode(str, Enum):
     Values:
         DISABLED: No metadata file paths are injected; gvametapublish elements remain unchanged (default).
         FILE: gvametapublish elements write JSON-Lines metadata, available via SSE endpoints.
+        MQTT: gvametapublish elements publish metadata using method=mqtt.
     """
 
     DISABLED = "disabled"
     FILE = "file"
+    MQTT = "mqtt"
 
 
 @dataclass

@@ -10,7 +10,7 @@ variants:
   - name: GPU
     pipeline_description: >-
       filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
-      decodebin3 ! video/x-raw\(memory:VAMemory\) !
+      decodebin3 ! 
       gvadetect
       model=/models/output/public/yolo26s-pose/FP16/yolo26s-pose.xml
       pre-process-backend=va-surface-sharing
@@ -27,4 +27,22 @@ variants:
       gvametaconvert add-tensor-data=true json-indent=-1 !
       gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
       fakesink name=default_output_sink sync=false async=false
-
+  - name: NPU
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26s-pose/FP16/yolo26s-pose.xml
+      pre-process-backend=va
+      device=NPU
+      batch-size=1
+      nireq=2
+      inference-interval=3
+      inference-region=full-frame !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false

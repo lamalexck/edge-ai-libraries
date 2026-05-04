@@ -1189,6 +1189,7 @@ class MetadataMode(str, Enum):
     ## Values
     - `DISABLED` - No metadata file paths are injected; gvametapublish elements remain unchanged (default)
     - `FILE` - gvametapublish elements write JSON-Lines metadata, available via SSE endpoints
+    - `MQTT` - gvametapublish elements publish metadata with `method=mqtt` while preserving broker/topic settings from the pipeline
 
     ### Example
     ```json
@@ -1198,6 +1199,7 @@ class MetadataMode(str, Enum):
 
     DISABLED = "disabled"
     FILE = "file"
+    MQTT = "mqtt"
 
 
 class ExecutionConfig(BaseModel):
@@ -1219,6 +1221,7 @@ class ExecutionConfig(BaseModel):
     - `metadata_mode` - Mode for metadata publishing via `gvametapublish` elements present in the pipeline:
       - `disabled` - No metadata file paths are injected; gvametapublish elements remain unchanged (default)
       - `file` - gvametapublish elements write JSON-Lines metadata, available via SSE endpoints
+      - `mqtt` - gvametapublish elements publish metadata with `method=mqtt` while preserving `address`, `topic`, and `max-connect-attempts`
 
     ### Example (disabled output, no runtime limit)
     ```json
@@ -1265,7 +1268,7 @@ class ExecutionConfig(BaseModel):
     )
     metadata_mode: MetadataMode = Field(
         default=MetadataMode.DISABLED,
-        description="Metadata publishing mode. 'disabled' (default): no metadata produced. 'file': gvametapublish elements write JSON-Lines metadata, available via SSE endpoints.",
+        description="Metadata publishing mode. 'disabled' (default): no metadata produced. 'file': gvametapublish elements write JSON-Lines metadata for SSE endpoints. 'mqtt': gvametapublish elements publish metadata with method=mqtt while preserving address/topic settings from the pipeline.",
     )
     enable_latency_metrics: bool = Field(
         default=False,
