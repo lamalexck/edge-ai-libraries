@@ -280,8 +280,6 @@
   extra_model_procs: []
   unsupported_devices: ""
   default: true
-<<<<<<< HEAD
-=======
 
 - name: yolo26s-pose
   display_name: YOLO 26s Pose
@@ -312,4 +310,3 @@
   extra_model_procs: []
   unsupported_devices: ""
   default: true
->>>>>>> 4a6c4db ([ViPPET] Initial commit for slip-and-fall pipeline)
