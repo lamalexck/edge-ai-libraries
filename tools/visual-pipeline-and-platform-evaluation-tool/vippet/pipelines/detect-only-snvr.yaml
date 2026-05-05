@@ -6,7 +6,7 @@ tags:
   - Smart Cities
 thumbnail: images/smart-nvr.png
 variants:
-  - name: CPU
+  - name: GPU_yolo11n
     pipeline_description: >-
       filesrc location=/videos/input/bigbuckbunny.h265.1080p.2mbps.mp4 !
       parsebin !
@@ -15,14 +15,15 @@ variants:
       splitmuxsink location=/tmp/bigbuckbunny-output.mp4
       t0. !
       queue !
-      avdec_h265 !
-      video/x-raw !
-      gvafpscounter starting-frame=100 !
+      vah265dec !
+      video/x-raw(memory:VAMemory) !
+      gvafpscounter starting-frame=500 !
       gvadetect
-        model=/models/output/public/yolo11s/INT8/yolo11s.xml
+        model=/models/output/public/yolo11n/INT8/yolo11n.xml
         model-instance-id=detect0
-        pre-process-backend=opencv
-        device=CPU
+        pre-process-backend=va-surface-sharing
+        device=GPU
+        ie-config=GPU_THROUGHPUT_STREAMS=2
         batch-size=0
         inference-interval=3
         inference-region=full-frame
@@ -31,8 +32,35 @@ variants:
       gvawatermark !
       gvametaconvert format=json !
       gvametapublish method=file file-path=/dev/null !
-      fakesink name=default_output_sink
-  - name: GPU
+      fakesink name=default_output_sink async=false
+  - name: NPU_yolo11n
+    pipeline_description: >-
+      filesrc location=/videos/input/bigbuckbunny.h265.1080p.2mbps.mp4 !
+      parsebin !
+      tee name=t0 !
+      queue !
+      splitmuxsink location=/tmp/bigbuckbunny-output.mp4
+      t0. !
+      queue !
+      vah265dec !
+      vapostproc !
+      video/x-raw\(memory:VAMemory\) !
+      gvafpscounter starting-frame=500 !
+      gvadetect
+        model=/models/output/public/yolo11n/INT8/yolo11n.xml
+        model-instance-id=detect0
+        pre-process-backend=va
+        device=NPU
+        batch-size=1
+        inference-interval=3
+        inference-region=full-frame
+        nireq=2 !
+      queue !
+      gvawatermark !
+      gvametaconvert format=json !
+      gvametapublish method=file file-path=/dev/null !
+      fakesink name=default_output_sink async=false
+  - name: GPU_yolo11s
     pipeline_description: >-
       filesrc location=/videos/input/bigbuckbunny.h265.1080p.2mbps.mp4 !
       parsebin !
@@ -59,7 +87,7 @@ variants:
       gvametaconvert format=json !
       gvametapublish method=file file-path=/dev/null !
       fakesink name=default_output_sink async=false
-  - name: NPU
+  - name: NPU_yolo11s
     pipeline_description: >-
       filesrc location=/videos/input/bigbuckbunny.h265.1080p.2mbps.mp4 !
       parsebin !
@@ -74,6 +102,60 @@ variants:
       gvafpscounter starting-frame=500 !
       gvadetect
         model=/models/output/public/yolo11s/INT8/yolo11s.xml
+        model-instance-id=detect0
+        pre-process-backend=va
+        device=NPU
+        batch-size=1
+        inference-interval=3
+        inference-region=full-frame
+        nireq=2 !
+      queue !
+      gvawatermark !
+      gvametaconvert format=json !
+      gvametapublish method=file file-path=/dev/null !
+      fakesink name=default_output_sink async=false
+  - name: GPU_yolo11m
+    pipeline_description: >-
+      filesrc location=/videos/input/bigbuckbunny.h265.1080p.2mbps.mp4 !
+      parsebin !
+      tee name=t0 !
+      queue !
+      splitmuxsink location=/tmp/bigbuckbunny-output.mp4
+      t0. !
+      queue !
+      vah265dec !
+      video/x-raw(memory:VAMemory) !
+      gvafpscounter starting-frame=500 !
+      gvadetect
+        model=/models/output/public/yolo11m/INT8/yolo11m.xml
+        model-instance-id=detect0
+        pre-process-backend=va-surface-sharing
+        device=GPU
+        ie-config=GPU_THROUGHPUT_STREAMS=2
+        batch-size=0
+        inference-interval=3
+        inference-region=full-frame
+        nireq=0 !
+      queue !
+      gvawatermark !
+      gvametaconvert format=json !
+      gvametapublish method=file file-path=/dev/null !
+      fakesink name=default_output_sink async=false
+  - name: NPU_yolo11m
+    pipeline_description: >-
+      filesrc location=/videos/input/bigbuckbunny.h265.1080p.2mbps.mp4 !
+      parsebin !
+      tee name=t0 !
+      queue !
+      splitmuxsink location=/tmp/bigbuckbunny-output.mp4
+      t0. !
+      queue !
+      vah265dec !
+      vapostproc !
+      video/x-raw\(memory:VAMemory\) !
+      gvafpscounter starting-frame=500 !
+      gvadetect
+        model=/models/output/public/yolo11m/INT8/yolo11m.xml
         model-instance-id=detect0
         pre-process-backend=va
         device=NPU
