@@ -252,7 +252,52 @@
       model_proc: ""
   extra_model_procs: []
   unsupported_devices: ""
-  default: false
+  default: true
+
+- name: yolo26n
+  display_name: YOLO 26n 640x640
+  source: public
+  type: detection
+  precisions:
+    - precision: INT8
+      model_path: public/yolo26n/INT8/yolo26n.xml
+      model_proc: ""
+    - precision: FP16
+      model_path: public/yolo26n/FP16/yolo26n.xml
+      model_proc: ""
+  extra_model_procs: []
+  unsupported_devices: ""
+  default: true
+
+- name: yolo26s
+  display_name: YOLO 26s 640x640
+  source: public
+  type: detection
+  precisions:
+    - precision: INT8
+      model_path: public/yolo26s/INT8/yolo26s.xml
+      model_proc: ""
+    - precision: FP16
+      model_path: public/yolo26s/FP16/yolo26s.xml
+      model_proc: ""
+  extra_model_procs: []
+  unsupported_devices: ""
+  default: true
+
+- name: yolo26m
+  display_name: YOLO v26m 640x640
+  source: public
+  type: detection
+  precisions:
+    - precision: INT8
+      model_path: public/yolo26m/INT8/yolo26m.xml
+      model_proc: ""
+    - precision: FP16
+      model_path: public/yolo26m/FP16/yolo26m.xml
+      model_proc: ""
+  extra_model_procs: []
+  unsupported_devices: ""
+  default: true
 
 - name: face-detection-retail-0004
   display_name: Face Detection Retail 0004

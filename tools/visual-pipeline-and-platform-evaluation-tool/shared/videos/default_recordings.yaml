@@ -14,3 +14,9 @@
   filename: bears.mp4
 - url: "https://videos.pexels.com/video-files/1192116/1192116-sd_640_360_30fps.mp4"
   filename: traffic.mp4
+- url: "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h265/1080/Big_Buck_Bunny_1080_10s_2MB.mp4"
+  filename: bigbuckbunny.h265.1080p.2mbps.mp4
+- url: "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h265/1080/Big_Buck_Bunny_1080_10s_1MB.mp4"
+  filename: bigbuckbunny.h265.1080p.1mbps.mp4
+- url: "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h265/1080/Big_Buck_Bunny_1080_10s_5MB.mp4"
+  filename: bigbuckbunny.h265.1080p.5mbps.mp4
