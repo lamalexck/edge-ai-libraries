@@ -209,7 +209,7 @@ def extract_persons_data_from_frame(
                 break
 
         if not keypoints_tensor:
-            logger.warning(f"No keypoints tensor for region_id {obj.get('region_id')}")
+            #logger.warning(f"No keypoints tensor for region_id {obj.get('region_id')}")
             continue
 
         kp_data = keypoints_tensor.get("data", [])
