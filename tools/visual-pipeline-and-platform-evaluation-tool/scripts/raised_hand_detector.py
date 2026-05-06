@@ -13,6 +13,7 @@ import json
 import logging
 import signal
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,8 @@ from typing import Any
 import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
+
+from telegram_bot import TelegramBot
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,7 @@ _mqtt_client = None
 _shutdown_event = False
 _start_time = None
 _duration_seconds = None
+_telegram_bot = None
 
 
 SKELETON_CONNECTIONS: list[tuple[str, str, tuple[int, int, int]]] = [
@@ -549,7 +553,7 @@ def on_subscribe(client, userdata, mid, reasonCodes, properties=None):
 
 def on_message(client, userdata, msg):
     """MQTT message callback."""
-    global _start_time, _duration_seconds, _shutdown_event
+    global _start_time, _duration_seconds, _shutdown_event, _telegram_bot
     
     # Check duration timeout
     if _duration_seconds and _start_time:
@@ -567,6 +571,33 @@ def on_message(client, userdata, msg):
     
     events = evaluate_frames(frames)
     write_events(events, userdata["output_json"])
+    
+    # Send raised hand detections to Telegram if enabled
+    if _telegram_bot and events:
+        for event in events:
+            num_raised = event.get("num_with_hands_raised", 0)
+            if num_raised > 0:
+                # Build caption for image-only notifications.
+                detection_time = event.get("detection_time", time.time())
+                timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(detection_time))
+                caption = (
+                    "<b>Raised Hands Detected</b>\n"
+                    f"Time: {timestamp}"
+                )
+                
+                # Generate and send PNG images
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    try:
+                        png_paths = render_raised_hands_pngs_from_event_json(
+                            event, tmpdir
+                        )
+                        if png_paths:
+                            _telegram_bot.send_image(
+                                png_paths[0],
+                                caption=caption,
+                            )
+                    except Exception as e:
+                        logger.error(f"Failed to send PNG images to Telegram: {e}")
 
 
 def on_disconnect(client, userdata, flags, rc, properties=None):
@@ -663,13 +694,18 @@ def parse_arguments() -> argparse.Namespace:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging level (default: INFO)"
     )
+    parser.add_argument(
+        "--no-telegram",
+        action="store_true",
+        help="Disable Telegram notifications even if TELEGRAM_* values exist in .env"
+    )
     
     return parser.parse_args()
 
 
 def main():
     """Main entry point."""
-    global _mqtt_client, _start_time, _duration_seconds
+    global _mqtt_client, _start_time, _duration_seconds, _telegram_bot
     
     args = parse_arguments()
     
@@ -685,6 +721,18 @@ def main():
     logger.info(f"MQTT Broker: {args.mqtt_host}:{args.mqtt_port}")
     logger.info(f"Topic: {args.mqtt_topic}")
     logger.info(f"Output: {args.output_json}")
+    
+    # Initialize Telegram bot by default from .env unless explicitly disabled.
+    if args.no_telegram:
+        logger.info("Telegram bot disabled via --no-telegram")
+        _telegram_bot = None
+    else:
+        try:
+            _telegram_bot = TelegramBot()
+            logger.info("Telegram bot initialized successfully from .env/environment")
+        except ValueError as e:
+            logger.warning(f"Telegram bot unavailable: {e}")
+            _telegram_bot = None
     
     if args.duration is not None:
         if args.duration <= 0:
