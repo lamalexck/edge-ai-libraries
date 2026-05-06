@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
 import paho.mqtt.client as mqtt
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,23 @@ _mqtt_client = None
 _shutdown_event = False
 _start_time = None
 _duration_seconds = None
+
+
+SKELETON_CONNECTIONS: list[tuple[str, str, tuple[int, int, int]]] = [
+    # Yellow (BGR)
+    ("ear_l", "eye_l", (0, 255, 255)),
+    ("eye_l", "nose", (0, 255, 255)),
+    ("nose", "eye_r", (0, 255, 255)),
+    ("eye_r", "ear_r", (0, 255, 255)),
+    # Blue (BGR)
+    ("ear_l", "shoulder_l", (255, 0, 0)),
+    ("ear_r", "shoulder_r", (255, 0, 0)),
+    # Green (BGR)
+    ("wrist_l", "elbow_l", (0, 255, 0)),
+    ("elbow_l", "shoulder_l", (0, 255, 0)),
+    ("wrist_r", "elbow_r", (0, 255, 0)),
+    ("elbow_r", "shoulder_r", (0, 255, 0)),
+]
 
 
 def extract_keypoint_coords(
@@ -365,6 +384,116 @@ def write_events(events: list[dict[str, Any]], output_path: str | Path) -> None:
     """
     for event in events:
         append_jsonl_event(event, output_path)
+
+
+def _clamp_point(x: int, y: int, width: int, height: int) -> tuple[int, int]:
+    """Clamp a point to image bounds."""
+    clamped_x = max(0, min(width - 1, x))
+    clamped_y = max(0, min(height - 1, y))
+    return clamped_x, clamped_y
+
+
+def render_person_keypoints_png(person: dict[str, Any], output_file: str | Path) -> Path:
+    """
+    Render a single person's keypoints to a PNG image sized to the person's bbox.
+
+    Input keypoints are in frame coordinates. They are projected to bbox-local
+    coordinates via:
+      local_x = frame_x - bbox_x
+      local_y = frame_y - bbox_y
+
+    Args:
+        person: Person dict with keys ``bbox`` and ``keypoints``.
+        output_file: Output PNG path.
+
+    Returns:
+        Output path where the PNG was written.
+    """
+    bbox = person.get("bbox", {})
+    keypoints = person.get("keypoints", {})
+
+    bbox_x = float(bbox.get("x", 0))
+    bbox_y = float(bbox.get("y", 0))
+    bbox_w = int(float(bbox.get("w", 0)))
+    bbox_h = int(float(bbox.get("h", 0)))
+
+    if bbox_w <= 0 or bbox_h <= 0:
+        raise ValueError(f"Invalid bbox dimensions: w={bbox_w}, h={bbox_h}")
+
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    image = np.zeros((bbox_h, bbox_w, 3), dtype=np.uint8)
+
+    local_points: dict[str, tuple[int, int]] = {}
+    for name, coords in keypoints.items():
+        frame_x = int(round(float(coords["x"])))
+        frame_y = int(round(float(coords["y"])))
+        local_x = frame_x - int(round(bbox_x))
+        local_y = frame_y - int(round(bbox_y))
+        local_points[name] = _clamp_point(local_x, local_y, bbox_w, bbox_h)
+
+    for p1_name, p2_name, color in SKELETON_CONNECTIONS:
+        if p1_name in local_points and p2_name in local_points:
+            cv2.line(image, local_points[p1_name], local_points[p2_name], color, 2)
+
+    for point in local_points.values():
+        cv2.circle(image, point, 3, (255, 255, 255), -1)
+
+    write_ok = cv2.imwrite(str(output_path), image)
+    if not write_ok:
+        raise IOError(f"Failed to write PNG: {output_path}")
+
+    return output_path
+
+
+def render_raised_hands_pngs_from_event_json(
+    input_json: str | Path | dict[str, Any] | list[dict[str, Any]],
+    output_dir: str | Path,
+) -> list[Path]:
+    """
+    Render one PNG per raised-hand person from event JSON.
+
+    Args:
+        input_json: Event JSON path, single event dict, or list of events.
+        output_dir: Output directory.
+
+    Returns:
+        List of generated PNG paths.
+    """
+    if isinstance(input_json, (str, Path)):
+        with open(input_json, "r") as f:
+            loaded = json.load(f)
+    else:
+        loaded = input_json
+
+    if isinstance(loaded, dict):
+        events = [loaded]
+    elif isinstance(loaded, list):
+        events = loaded
+    else:
+        raise ValueError("input_json must resolve to dict or list")
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    created: list[Path] = []
+    for event in events:
+        frame_index = event.get("frame_index", 0)
+        persons = event.get("persons_with_raised_hands", [])
+        for person in persons:
+            region_id = person.get("region_id", "unknown")
+            base_name = f"frame_{frame_index}_region_{region_id}.png"
+            candidate = out_dir / base_name
+            suffix = 1
+            while candidate.exists():
+                candidate = out_dir / f"frame_{frame_index}_region_{region_id}_{suffix}.png"
+                suffix += 1
+
+            render_person_keypoints_png(person, candidate)
+            created.append(candidate)
+
+    return created
 
 
 # Phase 2 & 3: MQTT Client with Graceful Shutdown

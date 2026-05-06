@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
+import cv2
 import pytest
 import paho.mqtt.client as mqtt
 
@@ -21,6 +22,8 @@ from raised_hand_detector import (
     parse_payload,
     evaluate_frames,
     append_jsonl_event,
+    render_person_keypoints_png,
+    render_raised_hands_pngs_from_event_json,
     write_events,
     create_mqtt_client,
     on_connect,
@@ -150,6 +153,13 @@ def temp_jsonl_file():
     # Cleanup
     if temp_path.exists():
         temp_path.unlink()
+
+
+@pytest.fixture
+def temp_dir():
+    """Temporary directory for image outputs."""
+    with tempfile.TemporaryDirectory() as d:
+        yield Path(d)
 
 
 # ============================================================================
@@ -349,6 +359,84 @@ class TestJSONLAppend:
         for i, line in enumerate(lines, 1):
             parsed = json.loads(line)
             assert parsed["id"] == i
+
+
+class TestImageRendering:
+    """Test PNG rendering for raised-hand persons."""
+
+    def test_render_person_keypoints_png_creates_expected_size(self, temp_dir):
+        """Rendered PNG dimensions should match bbox (h, w)."""
+        person = {
+            "region_id": 1,
+            "bbox": {"x": 100, "y": 200, "w": 300, "h": 400},
+            "keypoints": {
+                "nose": {"x": 250, "y": 350},
+                "eye_l": {"x": 230, "y": 330},
+                "eye_r": {"x": 270, "y": 330},
+                "ear_l": {"x": 215, "y": 335},
+                "ear_r": {"x": 285, "y": 335},
+                "shoulder_l": {"x": 220, "y": 390},
+                "shoulder_r": {"x": 280, "y": 390},
+                "elbow_l": {"x": 205, "y": 310},
+                "elbow_r": {"x": 295, "y": 315},
+                "wrist_l": {"x": 200, "y": 280},
+                "wrist_r": {"x": 300, "y": 285},
+            },
+        }
+        output = temp_dir / "person.png"
+        result = render_person_keypoints_png(person, output)
+        assert result.exists()
+
+        image = cv2.imread(str(result))
+        assert image is not None
+        assert image.shape[0] == 400
+        assert image.shape[1] == 300
+
+    def test_render_raised_hands_pngs_from_event_json_creates_one_per_person(self, temp_dir):
+        """Batch renderer should produce one PNG per raised-hand person."""
+        event = {
+            "frame_index": 7,
+            "persons_with_raised_hands": [
+                {
+                    "region_id": 10,
+                    "bbox": {"x": 0, "y": 0, "w": 120, "h": 160},
+                    "keypoints": {
+                        "nose": {"x": 60, "y": 50},
+                        "eye_l": {"x": 52, "y": 45},
+                        "eye_r": {"x": 68, "y": 45},
+                        "ear_l": {"x": 45, "y": 48},
+                        "ear_r": {"x": 75, "y": 48},
+                        "shoulder_l": {"x": 50, "y": 70},
+                        "shoulder_r": {"x": 70, "y": 70},
+                        "elbow_l": {"x": 45, "y": 80},
+                        "elbow_r": {"x": 75, "y": 80},
+                        "wrist_l": {"x": 40, "y": 90},
+                        "wrist_r": {"x": 80, "y": 90},
+                    },
+                },
+                {
+                    "region_id": 11,
+                    "bbox": {"x": 100, "y": 80, "w": 140, "h": 180},
+                    "keypoints": {
+                        "nose": {"x": 170, "y": 140},
+                        "eye_l": {"x": 162, "y": 135},
+                        "eye_r": {"x": 178, "y": 135},
+                        "ear_l": {"x": 155, "y": 138},
+                        "ear_r": {"x": 185, "y": 138},
+                        "shoulder_l": {"x": 160, "y": 165},
+                        "shoulder_r": {"x": 180, "y": 165},
+                        "elbow_l": {"x": 150, "y": 175},
+                        "elbow_r": {"x": 190, "y": 175},
+                        "wrist_l": {"x": 145, "y": 185},
+                        "wrist_r": {"x": 195, "y": 185},
+                    },
+                },
+            ],
+        }
+
+        created = render_raised_hands_pngs_from_event_json(event, temp_dir)
+        assert len(created) == 2
+        assert all(path.exists() for path in created)
 
 
 # ============================================================================
