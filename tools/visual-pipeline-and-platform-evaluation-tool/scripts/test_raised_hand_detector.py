@@ -16,6 +16,8 @@ import paho.mqtt.client as mqtt
 from raised_hand_detector import (
     extract_keypoint_coords,
     detect_raised_hands_in_frame,
+    compute_frame_keypoints,
+    extract_persons_data_from_frame,
     parse_payload,
     evaluate_frames,
     append_jsonl_event,
@@ -33,6 +35,9 @@ from raised_hand_detector import (
 # ============================================================================
 
 
+BBOX = {"x": 100, "y": 200, "w": 300, "h": 400}
+
+
 @pytest.fixture
 def sample_frame_raised_hands():
     """Frame with one person who has both hands raised."""
@@ -41,6 +46,7 @@ def sample_frame_raised_hands():
         "objects": [
             {
                 "region_id": 0,
+                "x": BBOX["x"], "y": BBOX["y"], "w": BBOX["w"], "h": BBOX["h"],
                 "tensors": [
                     {
                         "name": "keypoints",
@@ -87,6 +93,7 @@ def sample_frame_hands_down():
         "objects": [
             {
                 "region_id": 0,
+                "x": BBOX["x"], "y": BBOX["y"], "w": BBOX["w"], "h": BBOX["h"],
                 "tensors": [
                     {
                         "name": "keypoints",
@@ -184,17 +191,90 @@ class TestPayloadParsing:
         assert result is None
 
 
+class TestComputeFrameKeypoints:
+    """Test bounding-box-relative to frame-pixel coordinate conversion."""
+
+    def test_zero_origin(self):
+        """With bbox at origin, frame coords equal bbox-normalised values * dims."""
+        data = [0.5, 0.5] * 17  # all keypoints at centre of bbox
+        names = [f"kp{i}" for i in range(17)]
+        result = compute_frame_keypoints(data, names, 0.0, 0.0, 200.0, 400.0)
+        assert result["kp0"] == {"x": 100.0, "y": 200.0}
+
+    def test_offset_bbox(self):
+        """Offset bbox should shift all frame coordinates by (bbox_x, bbox_y)."""
+        data = [0.0, 0.0] * 17  # all keypoints at top-left of bbox
+        names = [f"kp{i}" for i in range(17)]
+        result = compute_frame_keypoints(data, names, 50.0, 80.0, 100.0, 200.0)
+        assert result["kp0"] == {"x": 50.0, "y": 80.0}
+
+    def test_outside_bbox_coords(self):
+        """kp_norm > 1 should project correctly beyond bbox boundary."""
+        data = [1.5, 1.5] * 17
+        names = [f"kp{i}" for i in range(17)]
+        result = compute_frame_keypoints(data, names, 0.0, 0.0, 100.0, 100.0)
+        assert result["kp0"] == {"x": 150.0, "y": 150.0}
+
+    def test_returns_all_17_keypoints(self):
+        """Result must contain exactly 17 named entries."""
+        data = [0.1, 0.2] * 17
+        names = [f"kp{i}" for i in range(17)]
+        result = compute_frame_keypoints(data, names, 0.0, 0.0, 100.0, 100.0)
+        assert len(result) == 17
+
+
+class TestExtractPersonsData:
+    """Test extract_persons_data_from_frame."""
+
+    def test_raised_person_has_keypoints(self, sample_frame_raised_hands):
+        """Person with raised hands should have bbox and all 17 keypoints."""
+        persons = extract_persons_data_from_frame(sample_frame_raised_hands)
+        assert len(persons) == 1
+        p = persons[0]
+        assert p["raised_hands"] is True
+        assert p["region_id"] == 0
+        assert set(p["bbox"].keys()) == {"x", "y", "w", "h"}
+        assert len(p["keypoints"]) == 17
+
+    def test_keypoints_projected_to_frame_coords(self, sample_frame_raised_hands):
+        """nose keypoint should be bbox_x + kp_x_norm*w, bbox_y + kp_y_norm*h."""
+        persons = extract_persons_data_from_frame(sample_frame_raised_hands)
+        kp = persons[0]["keypoints"]["nose"]
+        # nose data = [0.5, 0.5]; bbox = x=100,y=200,w=300,h=400
+        assert kp["x"] == pytest.approx(100 + 0.5 * 300, abs=0.01)
+        assert kp["y"] == pytest.approx(200 + 0.5 * 400, abs=0.01)
+
+    def test_hands_down_person_present_not_raised(self, sample_frame_hands_down):
+        """Person with hands down should appear with raised_hands=False."""
+        persons = extract_persons_data_from_frame(sample_frame_hands_down)
+        assert len(persons) == 1
+        assert persons[0]["raised_hands"] is False
+
+    def test_missing_objects_key_raises(self):
+        """Frame without 'objects' key should raise KeyError."""
+        with pytest.raises(KeyError):
+            extract_persons_data_from_frame({"timestamp": 0})
+
+
 class TestFrameEvaluation:
     """Test frame evaluation handler."""
 
     def test_evaluate_raised_hands_detected(self, sample_frame_raised_hands):
-        """Frame with raised hands should be marked as positive."""
+        """Frame with raised hands should emit event with persons_with_raised_hands."""
         events = evaluate_frames([sample_frame_raised_hands])
         assert len(events) == 1
-        assert events[0]["frame_index"] == 0
-        assert events[0]["timestamp"] == 1000
-        assert events[0]["raised_hands"] == [True]
-        assert "detection_time" in events[0]
+        e = events[0]
+        assert e["frame_index"] == 0
+        assert e["timestamp"] == 1000
+        assert e["raised_hands"] == [True]
+        assert e["num_people_detected"] == 1
+        assert e["num_with_hands_raised"] == 1
+        assert "detection_time" in e
+        assert len(e["persons_with_raised_hands"]) == 1
+        person = e["persons_with_raised_hands"][0]
+        assert "bbox" in person
+        assert "keypoints" in person
+        assert len(person["keypoints"]) == 17
 
     def test_evaluate_hands_down_no_event(self, sample_frame_hands_down):
         """Frame with hands down should not generate event."""

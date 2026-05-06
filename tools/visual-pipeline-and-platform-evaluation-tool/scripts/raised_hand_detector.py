@@ -120,6 +120,118 @@ def detect_raised_hands_in_frame(frame_data: dict[str, Any]) -> list[bool]:
     return results
 
 
+def compute_frame_keypoints(
+    data: list[float],
+    point_names: list[str],
+    bbox_x: float,
+    bbox_y: float,
+    bbox_w: float,
+    bbox_h: float,
+) -> dict[str, dict[str, float]]:
+    """
+    Convert bbox-relative normalised keypoints to frame pixel coordinates.
+
+    Keypoint values in the tensor are normalised relative to the person's bounding
+    box (0 = left/top edge, 1 = right/bottom edge; may exceed [0,1] if the point
+    lies outside the box).
+
+    Equation::
+
+        frame_x = bbox_x + kp_x_norm * bbox_w
+        frame_y = bbox_y + kp_y_norm * bbox_h
+
+    Args:
+        data: Flattened keypoint array [kp0_x, kp0_y, kp1_x, kp1_y, …] (34 values).
+        point_names: Ordered list of 17 keypoint names.
+        bbox_x: Bounding-box left edge in frame pixels.
+        bbox_y: Bounding-box top edge in frame pixels.
+        bbox_w: Bounding-box width in frame pixels.
+        bbox_h: Bounding-box height in frame pixels.
+
+    Returns:
+        Dict mapping keypoint name → {"x": float, "y": float} in frame pixels.
+    """
+    result: dict[str, dict[str, float]] = {}
+    for i, name in enumerate(point_names):
+        result[name] = {
+            "x": round(bbox_x + data[2 * i] * bbox_w, 2),
+            "y": round(bbox_y + data[2 * i + 1] * bbox_h, 2),
+        }
+    return result
+
+
+def extract_persons_data_from_frame(
+    frame_data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """
+    Extract per-person data from a frame including raised-hand status and all
+    17 keypoints projected to frame pixel coordinates.
+
+    Args:
+        frame_data: Single frame object with an 'objects' key.
+
+    Returns:
+        List of dicts, one per valid person, each with:
+          - region_id (int)
+          - raised_hands (bool)
+          - bbox: {x, y, w, h} in frame pixels
+          - keypoints: {name: {x, y}} for all 17 points in frame pixels
+    """
+    persons: list[dict[str, Any]] = []
+
+    if "objects" not in frame_data:
+        raise KeyError("frame_data must contain 'objects' key")
+
+    for obj in frame_data["objects"]:
+        keypoints_tensor = None
+        for tensor in obj.get("tensors", []):
+            if tensor.get("name") == "keypoints" and tensor.get("format") == "keypoints":
+                keypoints_tensor = tensor
+                break
+
+        if not keypoints_tensor:
+            logger.warning(f"No keypoints tensor for region_id {obj.get('region_id')}")
+            continue
+
+        kp_data = keypoints_tensor.get("data", [])
+        point_names = keypoints_tensor.get("point_names", [])
+        dims = keypoints_tensor.get("dims", [])
+
+        if dims != [17, 2] or len(kp_data) != 34 or len(point_names) != 17:
+            logger.warning(
+                f"Invalid keypoint tensor for region_id {obj.get('region_id')}: "
+                f"dims={dims}, data_len={len(kp_data)}"
+            )
+            continue
+
+        bbox_x: float = obj.get("x", 0)
+        bbox_y: float = obj.get("y", 0)
+        bbox_w: float = obj.get("w", 1)
+        bbox_h: float = obj.get("h", 1)
+
+        eye_l = extract_keypoint_coords(point_names, kp_data, "eye_l")
+        eye_r = extract_keypoint_coords(point_names, kp_data, "eye_r")
+        wrist_l = extract_keypoint_coords(point_names, kp_data, "wrist_l")
+        wrist_r = extract_keypoint_coords(point_names, kp_data, "wrist_r")
+
+        if not all([eye_l, eye_r, wrist_l, wrist_r]):
+            logger.warning(f"Missing required keypoints for region_id {obj.get('region_id')}")
+            continue
+
+        hands_raised = (wrist_l[1] < eye_l[1]) and (wrist_r[1] < eye_r[1])  # type: ignore[index]
+
+        persons.append({
+            "region_id": obj.get("region_id"),
+            "raised_hands": hands_raised,
+            "bbox": {"x": bbox_x, "y": bbox_y, "w": bbox_w, "h": bbox_h},
+            "keypoints": compute_frame_keypoints(
+                kp_data, point_names, bbox_x, bbox_y, bbox_w, bbox_h
+            ),
+        })
+
+    return persons
+
+
 # Phase 1: Reusable Handlers
 
 
@@ -176,40 +288,50 @@ def parse_payload(payload_bytes: bytes) -> list[dict[str, Any]] | None:
 def evaluate_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Evaluate each frame for raised hands and extract positive detections.
-    
-    A positive detection is a frame where at least one person has both hands raised.
-    
+
+    For each frame with at least one person with both hands raised, emits an event
+    containing summary fields and a ``persons_with_raised_hands`` list.  Each entry
+    in that list includes the person's bounding box and all 17 keypoints projected
+    to frame pixel coordinates.
+
     Args:
         frames: List of frame objects.
-    
+
     Returns:
         List of positive detection events (empty if no detections).
     """
     positive_events = []
-    
+
     for frame_idx, frame in enumerate(frames):
         try:
-            raised_hands_list = detect_raised_hands_in_frame(frame)
-            has_positive = any(raised_hands_list) if raised_hands_list else False
-            
-            if has_positive:
-                num_with_raised = sum(1 for h in raised_hands_list if h)
+            persons = extract_persons_data_from_frame(frame)
+            persons_raised = [p for p in persons if p["raised_hands"]]
+
+            if persons_raised:
                 event = {
                     "frame_index": frame_idx,
                     "timestamp": frame.get("timestamp", 0),
-                    "raised_hands": raised_hands_list,
+                    "raised_hands": [p["raised_hands"] for p in persons],
                     "detection_time": time.time(),
-                    "num_people_detected": len(raised_hands_list),
-                    "num_with_hands_raised": num_with_raised
+                    "num_people_detected": len(persons),
+                    "num_with_hands_raised": len(persons_raised),
+                    "persons_with_raised_hands": [
+                        {
+                            "region_id": p["region_id"],
+                            "bbox": p["bbox"],
+                            "keypoints": p["keypoints"],
+                        }
+                        for p in persons_raised
+                    ],
                 }
                 positive_events.append(event)
                 logger.info(
                     f"Positive detection in frame {frame_idx}: "
-                    f"{num_with_raised}/{len(raised_hands_list)} people with hands raised"
+                    f"{len(persons_raised)}/{len(persons)} people with hands raised"
                 )
         except Exception as e:
             logger.error(f"Error evaluating frame {frame_idx}: {e}")
-    
+
     return positive_events
 
 
