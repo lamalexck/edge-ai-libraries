@@ -7,7 +7,265 @@ tags:
   - Smart Cities
 thumbnail: images/slip-and-fall.png
 variants:
-  - name: GPU
+  - name: GPU_n1Z
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26n-pose/FP16/yolo26n-pose.xml
+      pre-process-backend=va-surface-sharing
+      device=GPU
+      ie-config=GPU_THROUGHPUT_STREAMS=2
+      batch-size=0
+      nireq=0
+      inference-interval=1
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvatrack tracking-type=zero-term-imageless !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: NPU_n1Z
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26n-pose/FP16/yolo26n-pose.xml
+      pre-process-backend=va
+      device=NPU
+      batch-size=1
+      nireq=2
+      inference-interval=1
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvatrack tracking-type=zero-term-imageless !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: GPU_n1_
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26n-pose/FP16/yolo26n-pose.xml
+      pre-process-backend=va-surface-sharing
+      device=GPU
+      ie-config=GPU_THROUGHPUT_STREAMS=2
+      batch-size=0
+      nireq=0
+      inference-interval=1
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: NPU_n1_
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26n-pose/FP16/yolo26n-pose.xml
+      pre-process-backend=va
+      device=NPU
+      batch-size=1
+      nireq=2
+      inference-interval=1
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: GPU_n3S
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26n-pose/FP16/yolo26n-pose.xml
+      pre-process-backend=va-surface-sharing
+      device=GPU
+      ie-config=GPU_THROUGHPUT_STREAMS=2
+      batch-size=0
+      nireq=0
+      inference-interval=3
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvatrack tracking-type=short-term-imageless !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: NPU_n3S
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26n-pose/FP16/yolo26n-pose.xml
+      pre-process-backend=va
+      device=NPU
+      batch-size=1
+      nireq=2
+      inference-interval=3
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvatrack tracking-type=short-term-imageless !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: GPU_n3_
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26n-pose/FP16/yolo26n-pose.xml
+      pre-process-backend=va-surface-sharing
+      device=GPU
+      ie-config=GPU_THROUGHPUT_STREAMS=2
+      batch-size=0
+      nireq=0
+      inference-interval=3
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: NPU_n3_
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26n-pose/FP16/yolo26n-pose.xml
+      pre-process-backend=va
+      device=NPU
+      batch-size=1
+      nireq=2
+      inference-interval=3
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: GPU_s1Z
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26s-pose/FP16/yolo26s-pose.xml
+      pre-process-backend=va-surface-sharing
+      device=GPU
+      ie-config=GPU_THROUGHPUT_STREAMS=2
+      batch-size=0
+      nireq=0
+      inference-interval=1
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvatrack tracking-type=zero-term-imageless !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: NPU_s1Z
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26s-pose/FP16/yolo26s-pose.xml
+      pre-process-backend=va
+      device=NPU
+      batch-size=1
+      nireq=2
+      inference-interval=1
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvatrack tracking-type=zero-term-imageless !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: GPU_s1_
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26s-pose/FP16/yolo26s-pose.xml
+      pre-process-backend=va-surface-sharing
+      device=GPU
+      ie-config=GPU_THROUGHPUT_STREAMS=2
+      batch-size=0
+      nireq=0
+      inference-interval=1
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: NPU_s1_
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26s-pose/FP16/yolo26s-pose.xml
+      pre-process-backend=va
+      device=NPU
+      batch-size=1
+      nireq=2
+      inference-interval=1
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: GPU_s3S
     pipeline_description: >-
       filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
       decodebin3 ! 
@@ -19,7 +277,10 @@ variants:
       batch-size=0
       nireq=0
       inference-interval=3
+      threshold=0.75
       inference-region=full-frame !
+      queue !
+      gvatrack tracking-type=short-term-imageless !
       queue !
       gvafpscounter starting-frame=100 !
       gvawatermark !
@@ -27,7 +288,7 @@ variants:
       gvametaconvert add-tensor-data=true json-indent=-1 !
       gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
       fakesink name=default_output_sink sync=false async=false
-  - name: NPU
+  - name: NPU_s3S
     pipeline_description: >-
       filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
       decodebin3 ! 
@@ -38,6 +299,50 @@ variants:
       batch-size=1
       nireq=2
       inference-interval=3
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvatrack tracking-type=short-term-imageless !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: GPU_s3_
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26s-pose/FP16/yolo26s-pose.xml
+      pre-process-backend=va-surface-sharing
+      device=GPU
+      ie-config=GPU_THROUGHPUT_STREAMS=2
+      batch-size=0
+      nireq=0
+      inference-interval=3
+      threshold=0.75
+      inference-region=full-frame !
+      queue !
+      gvafpscounter starting-frame=100 !
+      gvawatermark !
+      queue !
+      gvametaconvert add-tensor-data=true json-indent=-1 !
+      gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
+      fakesink name=default_output_sink sync=false async=false
+  - name: NPU_s3_
+    pipeline_description: >-
+      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      decodebin3 ! 
+      gvadetect
+      model=/models/output/public/yolo26s-pose/FP16/yolo26s-pose.xml
+      pre-process-backend=va
+      device=NPU
+      batch-size=1
+      nireq=2
+      inference-interval=3
+      threshold=0.75
       inference-region=full-frame !
       queue !
       gvafpscounter starting-frame=100 !
