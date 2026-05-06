@@ -1,311 +1,36 @@
-"""
-SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 
-Raised Hand Detector for pose keypoint analysis.
+"""Raised Hand Detector for pose keypoint analysis.
 
 This module processes pose JSON objects from MQTT payloads and determines
 whether each detected person has both hands raised above their eyes.
-Supports MQTT subscription with configurable broker settings and runtime duration control.
+Supports async MQTT subscription with configurable broker settings and runtime duration control.
+
+Architecture:
+- PoseDetector: Abstract pose detection framework
+- MQTTSubscriber: Async MQTT event streaming
+- NotificationManager: Event alert dispatch (Telegram, logging)
+- EventWriter: Async JSONL persistence
 """
 
 import argparse
+import asyncio
+import functools
 import json
 import logging
 import signal
 import sys
-import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-import cv2
-import numpy as np
-import paho.mqtt.client as mqtt
-
+from event_writer import EventWriter
+from mqtt_subscriber import MQTTSubscriber
+from notification_manager import NotificationManager
+from pose_detector import RaisedHandDetector
 from telegram_bot import TelegramBot
 
 logger = logging.getLogger(__name__)
-
-
-# Global state for graceful shutdown
-_mqtt_client = None
-_shutdown_event = False
-_start_time = None
-_duration_seconds = None
-_telegram_bot = None
-
-
-SKELETON_CONNECTIONS: list[tuple[str, str, tuple[int, int, int]]] = [
-    # Yellow (BGR)
-    ("ear_l", "eye_l", (0, 255, 255)),
-    ("eye_l", "nose", (0, 255, 255)),
-    ("nose", "eye_r", (0, 255, 255)),
-    ("eye_r", "ear_r", (0, 255, 255)),
-    # Blue (BGR)
-    ("ear_l", "shoulder_l", (255, 0, 0)),
-    ("ear_r", "shoulder_r", (255, 0, 0)),
-    # Green (BGR)
-    ("wrist_l", "elbow_l", (0, 255, 0)),
-    ("elbow_l", "shoulder_l", (0, 255, 0)),
-    ("wrist_r", "elbow_r", (0, 255, 0)),
-    ("elbow_r", "shoulder_r", (0, 255, 0)),
-]
-
-
-def extract_keypoint_coords(
-    point_names: list[str], data: list[float], point_name: str
-) -> tuple[float, float] | None:
-    """
-    Extract x, y coordinates for a specific keypoint from flattened data.
-    
-    Args:
-        point_names: List of 17 keypoint names in order.
-        data: Flattened list of 34 coordinate values (17 points × 2 coords).
-        point_name: Name of the keypoint to extract (e.g., 'eye_l', 'wrist_l').
-    
-    Returns:
-        Tuple of (x, y) coordinates or None if keypoint not found.
-    """
-    try:
-        index = point_names.index(point_name)
-        x = data[2 * index]
-        y = data[2 * index + 1]
-        return (x, y)
-    except (ValueError, IndexError):
-        return None
-
-
-def detect_raised_hands_in_frame(frame_data: dict[str, Any]) -> list[bool]:
-    """
-    Detect if each person in a frame has both hands raised above eyes.
-    
-    Logic: wrist_l_y < eye_l_y AND wrist_r_y < eye_r_y
-    (In normalized coordinates, lower y means higher in the frame)
-    
-    Args:
-        frame_data: Single frame object from pose JSON with 'objects' key.
-    
-    Returns:
-        List of booleans, one per person with all required keypoints present.
-        Persons missing required keypoints are skipped from the list.
-    
-    Raises:
-        KeyError: If frame_data is missing 'objects' key.
-        ValueError: If keypoint tensor format is invalid.
-    """
-    results = []
-    
-    if "objects" not in frame_data:
-        raise KeyError("frame_data must contain 'objects' key")
-    
-    for obj in frame_data["objects"]:
-        # Find keypoints tensor
-        keypoints_tensor = None
-        for tensor in obj.get("tensors", []):
-            if tensor.get("name") == "keypoints" and tensor.get("format") == "keypoints":
-                keypoints_tensor = tensor
-                break
-        
-        if not keypoints_tensor:
-            logger.warning(f"No keypoints tensor found for region_id {obj.get('region_id')}")
-            continue
-        
-        # Validate tensor structure
-        data = keypoints_tensor.get("data", [])
-        point_names = keypoints_tensor.get("point_names", [])
-        dims = keypoints_tensor.get("dims", [])
-        
-        if dims != [17, 2] or len(data) != 34 or len(point_names) != 17:
-            logger.warning(
-                f"Invalid keypoint tensor shape: dims={dims}, data_len={len(data)}, "
-                f"point_names_len={len(point_names)}"
-            )
-            continue
-        
-        # Extract required keypoints
-        eye_l = extract_keypoint_coords(point_names, data, "eye_l")
-        eye_r = extract_keypoint_coords(point_names, data, "eye_r")
-        wrist_l = extract_keypoint_coords(point_names, data, "wrist_l")
-        wrist_r = extract_keypoint_coords(point_names, data, "wrist_r")
-        
-        # Skip if any required keypoint is missing
-        if not all([eye_l, eye_r, wrist_l, wrist_r]):
-            logger.warning(
-                f"Missing required keypoints for region_id {obj.get('region_id')}: "
-                f"eye_l={eye_l}, eye_r={eye_r}, wrist_l={wrist_l}, wrist_r={wrist_r}"
-            )
-            continue
-        
-        # Check if both hands are raised (wrist y < eye y means higher in frame)
-        hands_raised = (wrist_l[1] < eye_l[1]) and (wrist_r[1] < eye_r[1])
-        results.append(hands_raised)
-    
-    return results
-
-
-def compute_frame_keypoints(
-    data: list[float],
-    point_names: list[str],
-    bbox_x: float,
-    bbox_y: float,
-    bbox_w: float,
-    bbox_h: float,
-) -> dict[str, dict[str, float]]:
-    """
-    Convert bbox-relative normalised keypoints to frame pixel coordinates.
-
-    Keypoint values in the tensor are normalised relative to the person's bounding
-    box (0 = left/top edge, 1 = right/bottom edge; may exceed [0,1] if the point
-    lies outside the box).
-
-    Equation::
-
-        frame_x = bbox_x + kp_x_norm * bbox_w
-        frame_y = bbox_y + kp_y_norm * bbox_h
-
-    Args:
-        data: Flattened keypoint array [kp0_x, kp0_y, kp1_x, kp1_y, …] (34 values).
-        point_names: Ordered list of 17 keypoint names.
-        bbox_x: Bounding-box left edge in frame pixels.
-        bbox_y: Bounding-box top edge in frame pixels.
-        bbox_w: Bounding-box width in frame pixels.
-        bbox_h: Bounding-box height in frame pixels.
-
-    Returns:
-        Dict mapping keypoint name → {"x": float, "y": float} in frame pixels.
-    """
-    result: dict[str, dict[str, float]] = {}
-    for i, name in enumerate(point_names):
-        result[name] = {
-            "x": round(bbox_x + data[2 * i] * bbox_w, 2),
-            "y": round(bbox_y + data[2 * i + 1] * bbox_h, 2),
-        }
-    return result
-
-
-def extract_persons_data_from_frame(
-    frame_data: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """
-    Extract per-person data from a frame including raised-hand status and all
-    17 keypoints projected to frame pixel coordinates.
-
-    Args:
-        frame_data: Single frame object with an 'objects' key.
-
-    Returns:
-        List of dicts, one per valid person, each with:
-          - region_id (int)
-          - raised_hands (bool)
-          - bbox: {x, y, w, h} in frame pixels
-          - keypoints: {name: {x, y}} for all 17 points in frame pixels
-    """
-    persons: list[dict[str, Any]] = []
-
-    if "objects" not in frame_data:
-        raise KeyError("frame_data must contain 'objects' key")
-
-    for obj in frame_data["objects"]:
-        keypoints_tensor = None
-        for tensor in obj.get("tensors", []):
-            if tensor.get("name") == "keypoints" and tensor.get("format") == "keypoints":
-                keypoints_tensor = tensor
-                break
-
-        if not keypoints_tensor:
-            #logger.warning(f"No keypoints tensor for region_id {obj.get('region_id')}")
-            continue
-
-        kp_data = keypoints_tensor.get("data", [])
-        point_names = keypoints_tensor.get("point_names", [])
-        dims = keypoints_tensor.get("dims", [])
-
-        if dims != [17, 2] or len(kp_data) != 34 or len(point_names) != 17:
-            logger.warning(
-                f"Invalid keypoint tensor for region_id {obj.get('region_id')}: "
-                f"dims={dims}, data_len={len(kp_data)}"
-            )
-            continue
-
-        bbox_x: float = obj.get("x", 0)
-        bbox_y: float = obj.get("y", 0)
-        bbox_w: float = obj.get("w", 1)
-        bbox_h: float = obj.get("h", 1)
-
-        eye_l = extract_keypoint_coords(point_names, kp_data, "eye_l")
-        eye_r = extract_keypoint_coords(point_names, kp_data, "eye_r")
-        wrist_l = extract_keypoint_coords(point_names, kp_data, "wrist_l")
-        wrist_r = extract_keypoint_coords(point_names, kp_data, "wrist_r")
-
-        if not all([eye_l, eye_r, wrist_l, wrist_r]):
-            logger.warning(f"Missing required keypoints for region_id {obj.get('region_id')}")
-            continue
-
-        hands_raised = (wrist_l[1] < eye_l[1]) and (wrist_r[1] < eye_r[1])  # type: ignore[index]
-
-        persons.append({
-            "region_id": obj.get("region_id"),
-            "raised_hands": hands_raised,
-            "bbox": {"x": bbox_x, "y": bbox_y, "w": bbox_w, "h": bbox_h},
-            "keypoints": compute_frame_keypoints(
-                kp_data, point_names, bbox_x, bbox_y, bbox_w, bbox_h
-            ),
-        })
-
-    return persons
-
-
-# Phase 1: Reusable Handlers
-
-
-def parse_payload(payload_bytes: bytes) -> list[dict[str, Any]] | None:
-    """
-    Parse MQTT payload as JSON array of frames OR single frame object.
-    
-    Handles both formats:
-    - Array of frame objects: [{"objects": [...], ...}, ...]
-    - Single frame object: {"objects": [...], ...}
-    
-    Args:
-        payload_bytes: Raw MQTT message payload.
-    
-    Returns:
-        List of frame objects (normalizes single object to list), or None if parsing fails.
-        Logs and skips malformed payloads without crashing.
-    """
-    try:
-        payload_str = payload_bytes.decode("utf-8")
-        data = json.loads(payload_str)
-        
-        # Normalize to list format
-        if isinstance(data, dict):
-            # Single frame object - wrap in list
-            if "objects" in data:
-                logger.debug("Payload is single frame object, normalizing to list")
-                return [data]
-            else:
-                logger.error(f"Payload dict missing 'objects' key: {list(data.keys())}")
-                return None
-        elif isinstance(data, list):
-            # Already a list of frames
-            if len(data) == 0:
-                logger.warning("Payload is empty list")
-                return []
-            # Verify all elements have 'objects' key
-            if not all(isinstance(f, dict) and "objects" in f for f in data):
-                logger.error("Not all list items are frame objects with 'objects' key")
-                return None
-            logger.debug(f"Payload is array of {len(data)} frames")
-            return data
-        else:
-            logger.error(f"Payload must be dict or list, got: {type(data).__name__}")
-            return None
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to decode JSON payload: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error parsing payload: {e}")
-        return None
 
 
 def evaluate_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -327,30 +52,66 @@ def evaluate_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     for frame_idx, frame in enumerate(frames):
         try:
-            persons = extract_persons_data_from_frame(frame)
-            persons_raised = [p for p in persons if p["raised_hands"]]
+            persons = []
+            if "objects" in frame:
+                # Use detector logic to extract persons with raised hands
+                # This is kept here for compatibility; in async flow, detector.detect() is used
+                for obj in frame.get("objects", []):
+                    keypoints_tensor = None
+                    for tensor in obj.get("tensors", []):
+                        if tensor.get("name") == "keypoints" and tensor.get("format") == "keypoints":
+                            keypoints_tensor = tensor
+                            break
 
-            if persons_raised:
+                    if not keypoints_tensor:
+                        continue
+
+                    kp_data = keypoints_tensor.get("data", [])
+                    point_names = keypoints_tensor.get("point_names", [])
+                    dims = keypoints_tensor.get("dims", [])
+
+                    if dims != [17, 2] or len(kp_data) != 34 or len(point_names) != 17:
+                        continue
+
+                    bbox_x: float = obj.get("x", 0)
+                    bbox_y: float = obj.get("y", 0)
+                    bbox_w: float = obj.get("w", 1)
+                    bbox_h: float = obj.get("h", 1)
+
+                    from pose_detector import extract_keypoint_coords, compute_frame_keypoints
+
+                    eye_l = extract_keypoint_coords(point_names, kp_data, "eye_l")
+                    eye_r = extract_keypoint_coords(point_names, kp_data, "eye_r")
+                    wrist_l = extract_keypoint_coords(point_names, kp_data, "wrist_l")
+                    wrist_r = extract_keypoint_coords(point_names, kp_data, "wrist_r")
+
+                    if not all([eye_l, eye_r, wrist_l, wrist_r]):
+                        continue
+
+                    hands_raised = (wrist_l[1] < eye_l[1]) and (wrist_r[1] < eye_r[1])  # type: ignore[index]
+
+                    if hands_raised:
+                        persons.append({
+                            "region_id": obj.get("region_id"),
+                            "bbox": {"x": bbox_x, "y": bbox_y, "w": bbox_w, "h": bbox_h},
+                            "keypoints": compute_frame_keypoints(
+                                kp_data, point_names, bbox_x, bbox_y, bbox_w, bbox_h
+                            ),
+                        })
+
+            if persons:
                 event = {
                     "frame_index": frame_idx,
                     "timestamp": frame.get("timestamp", 0),
-                    "raised_hands": [p["raised_hands"] for p in persons],
                     "detection_time": time.time(),
-                    "num_people_detected": len(persons),
-                    "num_with_hands_raised": len(persons_raised),
-                    "persons_with_raised_hands": [
-                        {
-                            "region_id": p["region_id"],
-                            "bbox": p["bbox"],
-                            "keypoints": p["keypoints"],
-                        }
-                        for p in persons_raised
-                    ],
+                    "num_people_detected": len(frame.get("objects", [])),
+                    "num_with_hands_raised": len(persons),
+                    "persons_with_raised_hands": persons,
                 }
                 positive_events.append(event)
                 logger.info(
                     f"Positive detection in frame {frame_idx}: "
-                    f"{len(persons_raised)}/{len(persons)} people with hands raised"
+                    f"{len(persons)} people with hands raised"
                 )
         except Exception as e:
             logger.error(f"Error evaluating frame {frame_idx}: {e}")
@@ -358,322 +119,10 @@ def evaluate_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return positive_events
 
 
-def append_jsonl_event(event: dict[str, Any], output_path: str | Path) -> None:
-    """
-    Append a single event to output JSON Lines file.
-    
-    Args:
-        event: Event dictionary to append.
-        output_path: Path to output JSONL file.
-    """
-    try:
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(output_path, "a") as f:
-            json.dump(event, f)
-            f.write("\n")
-        logger.debug(f"Appended event to {output_path}")
-    except Exception as e:
-        logger.error(f"Failed to append event to {output_path}: {e}")
-
-
-def write_events(events: list[dict[str, Any]], output_path: str | Path) -> None:
-    """
-    Write multiple events to output JSONL file.
-    
-    Args:
-        events: List of events to append.
-        output_path: Path to output JSONL file.
-    """
-    for event in events:
-        append_jsonl_event(event, output_path)
-
-
-def _clamp_point(x: int, y: int, width: int, height: int) -> tuple[int, int]:
-    """Clamp a point to image bounds."""
-    clamped_x = max(0, min(width - 1, x))
-    clamped_y = max(0, min(height - 1, y))
-    return clamped_x, clamped_y
-
-
-def render_person_keypoints_png(person: dict[str, Any], output_file: str | Path) -> Path:
-    """
-    Render a single person's keypoints to a PNG image sized to the person's bbox.
-
-    Input keypoints are in frame coordinates. They are projected to bbox-local
-    coordinates via:
-      local_x = frame_x - bbox_x
-      local_y = frame_y - bbox_y
-
-    Args:
-        person: Person dict with keys ``bbox`` and ``keypoints``.
-        output_file: Output PNG path.
-
-    Returns:
-        Output path where the PNG was written.
-    """
-    bbox = person.get("bbox", {})
-    keypoints = person.get("keypoints", {})
-
-    bbox_x = float(bbox.get("x", 0))
-    bbox_y = float(bbox.get("y", 0))
-    bbox_w = int(float(bbox.get("w", 0)))
-    bbox_h = int(float(bbox.get("h", 0)))
-
-    if bbox_w <= 0 or bbox_h <= 0:
-        raise ValueError(f"Invalid bbox dimensions: w={bbox_w}, h={bbox_h}")
-
-    output_path = Path(output_file)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    image = np.zeros((bbox_h, bbox_w, 3), dtype=np.uint8)
-
-    local_points: dict[str, tuple[int, int]] = {}
-    for name, coords in keypoints.items():
-        frame_x = int(round(float(coords["x"])))
-        frame_y = int(round(float(coords["y"])))
-        local_x = frame_x - int(round(bbox_x))
-        local_y = frame_y - int(round(bbox_y))
-        local_points[name] = _clamp_point(local_x, local_y, bbox_w, bbox_h)
-
-    for p1_name, p2_name, color in SKELETON_CONNECTIONS:
-        if p1_name in local_points and p2_name in local_points:
-            cv2.line(image, local_points[p1_name], local_points[p2_name], color, 2)
-
-    for point in local_points.values():
-        cv2.circle(image, point, 3, (255, 255, 255), -1)
-
-    write_ok = cv2.imwrite(str(output_path), image)
-    if not write_ok:
-        raise IOError(f"Failed to write PNG: {output_path}")
-
-    return output_path
-
-
-def render_raised_hands_pngs_from_event_json(
-    input_json: str | Path | dict[str, Any] | list[dict[str, Any]],
-    output_dir: str | Path,
-) -> list[Path]:
-    """
-    Render one PNG per raised-hand person from event JSON.
-
-    Args:
-        input_json: Event JSON path, single event dict, or list of events.
-        output_dir: Output directory.
-
-    Returns:
-        List of generated PNG paths.
-    """
-    if isinstance(input_json, (str, Path)):
-        with open(input_json, "r") as f:
-            loaded = json.load(f)
-    else:
-        loaded = input_json
-
-    if isinstance(loaded, dict):
-        events = [loaded]
-    elif isinstance(loaded, list):
-        events = loaded
-    else:
-        raise ValueError("input_json must resolve to dict or list")
-
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    created: list[Path] = []
-    for event in events:
-        frame_index = event.get("frame_index", 0)
-        persons = event.get("persons_with_raised_hands", [])
-        for person in persons:
-            region_id = person.get("region_id", "unknown")
-            base_name = f"frame_{frame_index}_region_{region_id}.png"
-            candidate = out_dir / base_name
-            suffix = 1
-            while candidate.exists():
-                candidate = out_dir / f"frame_{frame_index}_region_{region_id}_{suffix}.png"
-                suffix += 1
-
-            render_person_keypoints_png(person, candidate)
-            created.append(candidate)
-
-    return created
-
-
-# Phase 2 & 3: MQTT Client with Graceful Shutdown
-
-
-def shutdown_mqtt() -> None:
-    """
-    Graceful shutdown: unsubscribe, disconnect, and exit.
-    Idempotent - safe to call multiple times.
-    """
-    global _mqtt_client, _shutdown_event
-    
-    if _shutdown_event:
-        logger.debug("Shutdown already in progress, skipping.")
-        return
-    
-    _shutdown_event = True
-    logger.info("Initiating graceful shutdown...")
-    
-    if _mqtt_client and _mqtt_client.is_connected():
-        logger.info("Unsubscribing from topic...")
-        _mqtt_client.unsubscribe("#")
-        
-        logger.info("Disconnecting from MQTT broker...")
-        _mqtt_client.disconnect()
-        
-        # Wait for disconnect to complete
-        _mqtt_client.loop_stop()
-    
-    logger.info("Graceful shutdown complete.")
-    sys.exit(0)
-
-
-def handle_sigint(signum, frame):
-    """Signal handler for SIGINT/SIGTERM."""
-    logger.info(f"Received signal {signum}, initiating shutdown...")
-    shutdown_mqtt()
-
-
-def on_connect(client, userdata, flags, rc, properties=None):
-    """MQTT connect callback."""
-    if rc == 0:
-        logger.info(f"Connected to MQTT broker at {userdata['host']}:{userdata['port']}")
-    else:
-        logger.error(f"Failed to connect to MQTT broker: code {rc}")
-
-
-def on_subscribe(client, userdata, mid, reasonCodes, properties=None):
-    """MQTT subscribe callback."""
-    topic = userdata.get("topic", "unknown")
-    logger.info(f"Successfully subscribed to topic: {topic}")
-
-
-def on_message(client, userdata, msg):
-    """MQTT message callback."""
-    global _start_time, _duration_seconds, _shutdown_event, _telegram_bot
-    
-    # Check duration timeout
-    if _duration_seconds and _start_time:
-        elapsed = time.time() - _start_time
-        if elapsed >= _duration_seconds:
-            logger.info(f"Duration {_duration_seconds}s exceeded. Shutting down...")
-            shutdown_mqtt()
-            return
-    
-    logger.debug(f"Received message on topic {msg.topic}: {len(msg.payload)} bytes")
-    
-    frames = parse_payload(msg.payload)
-    if frames is None:
-        return
-    
-    events = evaluate_frames(frames)
-    write_events(events, userdata["output_json"])
-    
-    # Send raised hand detections to Telegram if enabled
-    if _telegram_bot and events:
-        for event in events:
-            num_raised = event.get("num_with_hands_raised", 0)
-            if num_raised > 0:
-                # Build caption for image-only notifications.
-                detection_time = event.get("detection_time", time.time())
-                timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(detection_time))
-                caption = (
-                    "<b>Raised Hands Detected</b>\n"
-                    f"Time: {timestamp}"
-                )
-                
-                # Generate and send PNG images
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    try:
-                        png_paths = render_raised_hands_pngs_from_event_json(
-                            event, tmpdir
-                        )
-                        if png_paths:
-                            _telegram_bot.send_image(
-                                png_paths[0],
-                                caption=caption,
-                            )
-                    except Exception as e:
-                        logger.error(f"Failed to send PNG images to Telegram: {e}")
-
-
-def on_disconnect(client, userdata, flags, rc, properties=None):
-    """MQTT disconnect callback."""
-    if rc == 0:
-        logger.info("Disconnected from MQTT broker")
-    else:
-        logger.warning(f"Unexpected disconnect from MQTT broker: code {rc}")
-
-
-def create_mqtt_client(
-    broker_host: str,
-    broker_port: int,
-    topic: str,
-    output_json: str | Path,
-) -> mqtt.Client:
-    """
-    Create and configure MQTT client.
-    
-    Args:
-        broker_host: MQTT broker hostname.
-        broker_port: MQTT broker port.
-        topic: Topic to subscribe to.
-        output_json: Path to output JSONL file.
-    
-    Returns:
-        Configured MQTT client (not yet connected).
-    """
-    # Handle both old and new paho-mqtt versions
-    try:
-        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="raised-hand-detector")
-    except AttributeError:
-        # Fallback for older paho-mqtt versions
-        client = mqtt.Client(client_id="raised-hand-detector")
-    
-    userdata = {
-        "host": broker_host,
-        "port": broker_port,
-        "topic": topic,
-        "output_json": output_json
-    }
-    client.user_data_set(userdata)
-    
-    client.on_connect = on_connect
-    client.on_subscribe = on_subscribe
-    client.on_message = on_message
-    client.on_disconnect = on_disconnect
-    
-    return client
-
-
-# Phase 2: CLI Runtime Configuration
-
-
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Raised hand detector with MQTT input"
-    )
-    parser.add_argument(
-        "--mqtt-host",
-        type=str,
-        default="localhost",
-        help="MQTT broker hostname (default: localhost)"
-    )
-    parser.add_argument(
-        "--mqtt-port",
-        type=int,
-        default=1883,
-        help="MQTT broker port (default: 1883)"
-    )
-    parser.add_argument(
-        "--mqtt-topic",
-        type=str,
-        default="pose",
-        help="MQTT topic to subscribe to (default: pose)"
+        description="Raised hand detector with async MQTT input"
     )
     parser.add_argument(
         "--duration",
@@ -699,41 +148,45 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Disable Telegram notifications even if TELEGRAM_* values exist in .env"
     )
-    
+
     return parser.parse_args()
 
 
-def main():
-    """Main entry point."""
-    global _mqtt_client, _start_time, _duration_seconds, _telegram_bot
-    
+async def main() -> None:
+    """Main async entry point."""
     args = parse_arguments()
-    
+
     # Configure logging
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
+
+    logger.info("=" * 60)
+    logger.info("Raised Hand Detector (Async MQTT + Pose Analysis)")
+    logger.info("=" * 60)
     
-    logger.info("="*60)
-    logger.info("Raised Hand Detector (MQTT + Pose Analysis)")
-    logger.info("="*60)
-    logger.info(f"MQTT Broker: {args.mqtt_host}:{args.mqtt_port}")
-    logger.info(f"Topic: {args.mqtt_topic}")
+    # Initialize components
+    mqtt_sub = MQTTSubscriber()
+    logger.info(f"MQTT Broker: {mqtt_sub.broker_host}:{mqtt_sub.broker_port}")
+    logger.info(f"Topic: {mqtt_sub.topic}")
     logger.info(f"Output: {args.output_json}")
     
-    # Initialize Telegram bot by default from .env unless explicitly disabled.
+    detector = RaisedHandDetector()
+    notifier = NotificationManager()
+    writer = EventWriter(args.output_json)
+
+    # Initialize Telegram bot by default from .env unless explicitly disabled
+    telegram_bot: Optional[TelegramBot] = None
     if args.no_telegram:
         logger.info("Telegram bot disabled via --no-telegram")
-        _telegram_bot = None
     else:
         try:
-            _telegram_bot = TelegramBot()
+            telegram_bot = TelegramBot()
             logger.info("Telegram bot initialized successfully from .env/environment")
         except ValueError as e:
             logger.warning(f"Telegram bot unavailable: {e}")
-            _telegram_bot = None
-    
+
     if args.duration is not None:
         if args.duration <= 0:
             logger.error("Duration must be positive")
@@ -741,90 +194,106 @@ def main():
         logger.info(f"Duration: {args.duration} seconds")
     else:
         logger.info("Duration: indefinite (Ctrl+C to stop)")
-    logger.info("="*60)
-    
-    _duration_seconds = args.duration
-    _start_time = time.time()
-    
-    # Create MQTT client
-    _mqtt_client = create_mqtt_client(
-        args.mqtt_host,
-        args.mqtt_port,
-        args.mqtt_topic,
-        args.output_json
-    )
-    
+    logger.info("=" * 60)
+
+    # Setup shutdown event for graceful termination
+    shutdown_event = asyncio.Event()
+    loop = asyncio.get_event_loop()
+    start_time = time.time()
+
+    def handle_signal(signame: str) -> None:
+        """Signal handler for graceful shutdown."""
+        logger.info(f"Received signal {signame}, initiating shutdown...")
+        shutdown_event.set()
+
     # Register signal handlers
-    signal.signal(signal.SIGINT, handle_sigint)
-    signal.signal(signal.SIGTERM, handle_sigint)
-    
+    for signame in ("SIGINT", "SIGTERM"):
+        loop.add_signal_handler(
+            getattr(signal, signame),
+            functools.partial(handle_signal, signame)
+        )
+
+    # Main event loop
     try:
-        logger.info("Connecting to MQTT broker...")
-        _mqtt_client.connect(args.mqtt_host, args.mqtt_port, keepalive=60)
-        _mqtt_client.subscribe(args.mqtt_topic)
-        
-        logger.info("Starting MQTT loop...")
-        _mqtt_client.loop_forever()
-    except KeyboardInterrupt:
-        logger.info("Keyboard interrupt received")
-        shutdown_mqtt()
+        async for frame_list in mqtt_sub.listen_for_messages():
+            # Check duration timeout
+            if args.duration and (time.time() - start_time) >= args.duration:
+                logger.info(f"Duration {args.duration}s exceeded. Shutting down...")
+                shutdown_event.set()
+
+            # Check shutdown signal
+            if shutdown_event.is_set():
+                break
+
+            # Evaluate frames for raised hands
+            events = evaluate_frames(frame_list)
+
+            # Write events to JSONL
+            if events:
+                await writer.append_events(events)
+
+            # Send notifications for each event
+            if events and telegram_bot:
+                for event in events:
+                    await notifier.notify_event(event, telegram_bot)
+            elif events:
+                # Log detections if no Telegram bot
+                for event in events:
+                    num_raised = event.get("num_with_hands_raised", 0)
+                    logger.info(f"Detection: {num_raised} people with raised hands")
+
+    except asyncio.CancelledError:
+        logger.info("Task cancelled, initiating shutdown...")
     except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
-        shutdown_mqtt()
+        logger.error(f"Error in main loop: {e}", exc_info=True)
+    finally:
+        logger.info("Graceful shutdown complete.")
 
 
-# Legacy file-based processing for backward compatibility
-
-
-def process_pose_video_file(
-    input_file: str | Path, output_file: str | Path
-) -> None:
+def process_pose_video_file(input_file: str | Path, output_file: str | Path) -> None:
     """
     Process a video pose JSON file and generate output with raised hand detection.
-    
+
+    LEGACY FUNCTION for backward compatibility with file-based processing.
+    New code should use the async MQTT-based detector.
+
     Args:
         input_file: Path to input JSON file containing array of frame objects.
         output_file: Path to output JSON file with detection results.
-    
+
     Raises:
         json.JSONDecodeError: If input file is not valid JSON.
-        IOError: If file I/O operations fail.
     """
     input_path = Path(input_file)
     output_path = Path(output_file)
-    
-    logger.info(f"Loading poses from {input_path}...")
+
+    logger.info(f"Processing video file: {input_path}")
+
+    # Load frames
     with open(input_path, "r") as f:
         frames = json.load(f)
-    
+
     if not isinstance(frames, list):
-        raise ValueError("Input JSON must be an array of frame objects")
-    
-    logger.info(f"Processing {len(frames)} frames...")
-    results = []
-    
-    for i, frame in enumerate(frames):
-        try:
-            frame_results = detect_raised_hands_in_frame(frame)
-            results.append({
-                "frame_index": i,
-                "timestamp": frame.get("timestamp", 0),
-                "raised_hands": frame_results
-            })
-        except Exception as e:
-            logger.error(f"Error processing frame {i}: {e}")
-            results.append({
-                "frame_index": i,
-                "timestamp": frame.get("timestamp", 0),
-                "error": str(e)
-            })
-    
-    logger.info(f"Writing results to {output_path}...")
+        frames = [frames]
+
+    # Evaluate frames
+    events = evaluate_frames(frames)
+
+    # Write results
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
-        json.dump(results, f, indent=2)
-    
-    logger.info(f"Successfully processed {len(frames)} frames. Output written to {output_path}")
+        json.dump(events, f, indent=2)
+
+    logger.info(f"Processed {len(frames)} frames, found {len(events)} detection events")
+    logger.info(f"Results written to {output_path}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+        sys.exit(1)
