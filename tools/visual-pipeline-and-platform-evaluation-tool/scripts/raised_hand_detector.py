@@ -58,15 +58,24 @@ def _put_with_drop_oldest(
     while True:
         try:
             target_queue.put_nowait(item)
+            queue_size = target_queue.qsize()
+            logger.debug(
+                "Enqueued %s batch (queue_size=%d/%d)",
+                queue_name,
+                queue_size,
+                target_queue.maxsize,
+            )
             return
         except queue.Full:
             try:
                 target_queue.get_nowait()
                 dropped_counter["count"] += 1
                 logger.warning(
-                    "Dropped oldest %s batch due to backpressure (total_dropped=%d)",
+                    "Dropped oldest %s batch due to backpressure (total_dropped=%d queue_size=%d/%d)",
                     queue_name,
                     dropped_counter["count"],
+                    target_queue.qsize(),
+                    target_queue.maxsize,
                 )
             except queue.Empty:
                 continue
@@ -98,6 +107,7 @@ def _mqtt_ingest_worker(
         worker_errors.put(exc)
         shutdown_event.set()
     finally:
+        logger.info("MQTT ingest worker shutting down")
         _put_with_drop_oldest(
             target_queue=frame_queue,
             item=SENTINEL,
@@ -123,6 +133,11 @@ def _evaluation_worker(
         while not shutdown_event.is_set():
             try:
                 frame_batch = frame_queue.get(timeout=0.2)
+                frame_queue_size = frame_queue.qsize()
+                logger.debug(
+                    "Dequeued frame batch (frame_queue_size=%d)",
+                    frame_queue_size,
+                )
             except queue.Empty:
                 continue
 
@@ -177,6 +192,7 @@ def _evaluation_worker(
         worker_errors.put(exc)
         shutdown_event.set()
     finally:
+        logger.info("Frame evaluation worker shutting down")
         _put_with_drop_oldest(
             target_queue=event_queue,
             item=SENTINEL,
@@ -200,6 +216,11 @@ def _output_worker(
         while not shutdown_event.is_set():
             try:
                 events = event_queue.get(timeout=0.2)
+                event_queue_size = event_queue.qsize()
+                logger.debug(
+                    "Dequeued event batch (event_queue_size=%d)",
+                    event_queue_size,
+                )
             except queue.Empty:
                 continue
 
@@ -219,6 +240,7 @@ def _output_worker(
         worker_errors.put(exc)
         shutdown_event.set()
     finally:
+        logger.info("Output worker shutting down")
         loop.close()
 
 
@@ -391,7 +413,7 @@ def evaluate_frames(
                 }
                 positive_events.append(event)
                 logger.info(
-                    "Positive detection people_with_hands_raised=%d",
+                    "Positive detection %d person with hands raised",
                     len(persons),
                 )
         except Exception as e:
@@ -562,6 +584,7 @@ async def main() -> None:
 
     # Main supervision loop
     try:
+        periodic_log_counter = 0
         while not shutdown_event.is_set():
             if args.duration and (time.time() - start_time) >= args.duration:
                 logger.info(f"Duration {args.duration}s exceeded. Shutting down...")
@@ -575,6 +598,18 @@ async def main() -> None:
                 logger.info("MQTT ingest thread completed")
                 shutdown_event.set()
                 break
+
+            # Log queue occupancy periodically (every ~5 seconds at 0.2s tick interval)
+            periodic_log_counter += 1
+            if periodic_log_counter >= 25:
+                periodic_log_counter = 0
+                logger.info(
+                    "Queue occupancy: frame=%d/%d event=%d/%d",
+                    frame_queue.qsize(),
+                    frame_queue.maxsize,
+                    event_queue.qsize(),
+                    event_queue.maxsize,
+                )
 
             await asyncio.sleep(0.2)
 
