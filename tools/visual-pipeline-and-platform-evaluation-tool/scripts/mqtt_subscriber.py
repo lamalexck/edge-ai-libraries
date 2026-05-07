@@ -168,7 +168,7 @@ class MQTTSubscriber:
                 self.is_connected_flag = True
                 logger.info(f"Connected to MQTT broker at {self.broker_host}:{self.broker_port}")
                 
-                await client.subscribe(listen_topic)
+                await client.subscribe(listen_topic, qos=0)
                 logger.info(f"Successfully subscribed to topic: {listen_topic}")
                 
                 async for message in client.messages:

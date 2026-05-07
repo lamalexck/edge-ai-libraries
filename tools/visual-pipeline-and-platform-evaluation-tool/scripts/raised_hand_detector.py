@@ -87,7 +87,7 @@ def _mqtt_ingest_worker(
                 break
             _put_with_drop_oldest(
                 target_queue=frame_queue,
-                item=frame_list,
+                item=(frame_list, time.time()),
                 queue_name="frame",
                 dropped_counter=frame_drop_counter,
             )
@@ -117,17 +117,43 @@ def _evaluation_worker(
 ) -> None:
     """Frame evaluation thread that translates frames into events."""
     last_detection_time: float | None = None
+    effective_startup_wall_time = startup_wall_time
+    has_calibrated_relative_anchor = False
     try:
         while not shutdown_event.is_set():
             try:
-                frame_list = frame_queue.get(timeout=0.2)
+                frame_batch = frame_queue.get(timeout=0.2)
             except queue.Empty:
                 continue
 
-            if frame_list is SENTINEL:
+            if frame_batch is SENTINEL:
                 break
 
-            events = evaluate_frames(frame_list, startup_wall_time=startup_wall_time)
+            if isinstance(frame_batch, tuple) and len(frame_batch) == 2:
+                frame_list, batch_received_wall_time = frame_batch
+            else:
+                frame_list = frame_batch
+                # Backward-compatible fallback for queue entries without receive-time metadata.
+                batch_received_wall_time = time.time()
+
+            if not has_calibrated_relative_anchor:
+                anchor_info = _derive_relative_time_anchor(
+                    frames=frame_list,
+                    batch_received_wall_time=batch_received_wall_time,
+                )
+                if anchor_info is not None:
+                    effective_startup_wall_time, first_offset_seconds = anchor_info
+                    has_calibrated_relative_anchor = True
+                    logger.info(
+                        "Calibrated relative timestamp anchor: startup_wall_time=%.6f first_offset_seconds=%.6f",
+                        effective_startup_wall_time,
+                        first_offset_seconds,
+                    )
+
+            events = evaluate_frames(
+                frame_list,
+                startup_wall_time=effective_startup_wall_time,
+            )
             if events:
                 if rate_limit_seconds > 0 and last_detection_time is not None:
                     earliest = min(e["detection_time"] for e in events)
@@ -199,9 +225,12 @@ def _output_worker(
 def _frame_timestamp_to_seconds(frame_timestamp: Any) -> float | None:
     """Convert frame timestamp metadata to seconds.
 
-    The slip-and-fall pipeline publishes GStreamer timestamps which are
-    typically relative to pipeline start and represented in nanoseconds.
-    This helper also supports common epoch-based units defensively.
+    The slip-and-fall pipeline publishes GStreamer timestamps via MQTT in nanoseconds.
+    This includes both relative offsets (from pipeline start) and epoch-based timestamps.
+    
+    Converts by dividing by 1e9 (ns -> seconds). This handles:
+    - Relative offsets: small values (e.g., 2e9 ns = 2 seconds)
+    - Epoch-ns values: large values (e.g., 1.7e18 ns = ~2024)
     """
     try:
         timestamp_value = float(frame_timestamp)
@@ -211,17 +240,7 @@ def _frame_timestamp_to_seconds(frame_timestamp: Any) -> float | None:
     if timestamp_value < 0:
         return None
 
-    # Handle epoch-like timestamps first.
-    if 946684800 <= timestamp_value <= 4102444800:
-        return timestamp_value
-    if 946684800000 <= timestamp_value <= 4102444800000:
-        return timestamp_value / 1_000
-    if 946684800000000 <= timestamp_value <= 4102444800000000:
-        return timestamp_value / 1_000_000
-    if 946684800000000000 <= timestamp_value <= 4102444800000000000:
-        return timestamp_value / 1_000_000_000
-
-    # For relative timestamps from GStreamer metadata, default to nanoseconds.
+    # MQTT contract: always nanoseconds. Convert to seconds.
     return timestamp_value / 1_000_000_000
 
 
@@ -252,6 +271,30 @@ def _compute_detection_time(
         startup_wall_time,
     )
     return startup_wall_time + timestamp_seconds
+
+
+def _derive_relative_time_anchor(
+    frames: list[dict[str, Any]],
+    batch_received_wall_time: float,
+) -> tuple[float, float] | None:
+    """Derive startup wall-time anchor from first relative frame timestamp.
+
+    Returns:
+        Tuple(anchor_epoch_seconds, first_relative_offset_seconds) when a relative
+        timestamp is found, otherwise None.
+    """
+    for frame in frames:
+        timestamp_seconds = _frame_timestamp_to_seconds(frame.get("timestamp"))
+        if timestamp_seconds is None:
+            continue
+
+        # Epoch-like timestamps do not need relative anchor calibration.
+        if 946684800 <= timestamp_seconds <= 4102444800:
+            return None
+
+        return batch_received_wall_time - timestamp_seconds, timestamp_seconds
+
+    return None
 
 
 def evaluate_frames(
@@ -348,11 +391,8 @@ def evaluate_frames(
                 }
                 positive_events.append(event)
                 logger.info(
-                    "Positive detection frame_index=%d people_with_hands_raised=%d mqtt_timestamp=%s computed_detection_time=%.6f",
-                    frame_idx,
+                    "Positive detection people_with_hands_raised=%d",
                     len(persons),
-                    mqtt_timestamp,
-                    computed_detection_time,
                 )
         except Exception as e:
             logger.error(f"Error evaluating frame {frame_idx}: {e}")
