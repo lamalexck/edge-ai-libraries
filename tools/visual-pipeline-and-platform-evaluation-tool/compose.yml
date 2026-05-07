@@ -66,6 +66,8 @@ x-vippet: &vippet
     - ./shared/scripts/:/scripts
     - ./shared/onvif/:/onvif
     - ./shared/metadata/:/metadata
+    - /etc/localtime:/etc/localtime:ro
+    - /etc/timezone:/etc/timezone:ro
 
 services:
   vippet-ui:

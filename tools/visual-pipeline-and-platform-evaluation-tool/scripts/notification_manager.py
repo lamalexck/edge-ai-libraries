@@ -33,7 +33,7 @@ class NotificationManager:
         """
         Send notification for a detected event.
 
-        Renders PNG from first person with raised hands and sends via Telegram
+        Renders a single full-frame PNG for the event and sends via Telegram
         with formatted caption. Falls back to logging if no Telegram bot provided.
 
         Args:
@@ -67,7 +67,7 @@ class NotificationManager:
                 try:
                     png_paths = render_raised_hands_pngs_from_event_json(event, tmpdir)
                     if png_paths:
-                        # Send only first image
+                        # One PNG is generated per event.
                         # Run sync send_image in executor to avoid blocking
                         loop = asyncio.get_event_loop()
                         await loop.run_in_executor(

@@ -27,13 +27,68 @@ from typing import Any, Optional
 from event_writer import EventWriter
 from mqtt_subscriber import MQTTSubscriber
 from notification_manager import NotificationManager
-from pose_detector import RaisedHandDetector
+from pose_detector import (
+    RaisedHandDetector,
+    compute_frame_keypoints,
+    extract_bbox_pixels,
+    extract_frame_resolution,
+    extract_keypoint_coords,
+)
 from telegram_bot import TelegramBot
 
 logger = logging.getLogger(__name__)
 
 
-def evaluate_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _frame_timestamp_to_seconds(frame_timestamp: Any) -> float | None:
+    """Convert frame timestamp metadata to seconds.
+
+    The slip-and-fall pipeline publishes GStreamer timestamps which are
+    typically relative to pipeline start and represented in nanoseconds.
+    This helper also supports common epoch-based units defensively.
+    """
+    try:
+        timestamp_value = float(frame_timestamp)
+    except (TypeError, ValueError):
+        return None
+
+    if timestamp_value < 0:
+        return None
+
+    # Handle epoch-like timestamps first.
+    if 946684800 <= timestamp_value <= 4102444800:
+        return timestamp_value
+    if 946684800000 <= timestamp_value <= 4102444800000:
+        return timestamp_value / 1_000
+    if 946684800000000 <= timestamp_value <= 4102444800000000:
+        return timestamp_value / 1_000_000
+    if 946684800000000000 <= timestamp_value <= 4102444800000000000:
+        return timestamp_value / 1_000_000_000
+
+    # For relative timestamps from GStreamer metadata, default to nanoseconds.
+    return timestamp_value / 1_000_000_000
+
+
+def _compute_detection_time(
+    frame_timestamp: Any,
+    startup_wall_time: float,
+    fallback_wall_time: float,
+) -> float:
+    """Compute event detection wall-clock time from frame metadata."""
+    timestamp_seconds = _frame_timestamp_to_seconds(frame_timestamp)
+    if timestamp_seconds is None:
+        logger.warning("Invalid frame timestamp metadata; using current wall-clock time")
+        return fallback_wall_time
+
+    # If metadata is already epoch-based, use it directly.
+    if 946684800 <= timestamp_seconds <= 4102444800:
+        return timestamp_seconds
+
+    return startup_wall_time + timestamp_seconds
+
+
+def evaluate_frames(
+    frames: list[dict[str, Any]], startup_wall_time: float | None = None
+) -> list[dict[str, Any]]:
     """
     Evaluate each frame for raised hands and extract positive detections.
 
@@ -49,10 +104,17 @@ def evaluate_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
         List of positive detection events (empty if no detections).
     """
     positive_events = []
+    fallback_wall_time = time.time()
+    effective_startup_wall_time = (
+        startup_wall_time if startup_wall_time is not None else fallback_wall_time
+    )
 
     for frame_idx, frame in enumerate(frames):
         try:
             persons = []
+            frame_resolution = extract_frame_resolution(frame)
+            frame_width = frame_resolution[0] if frame_resolution else None
+            frame_height = frame_resolution[1] if frame_resolution else None
             if "objects" in frame:
                 # Use detector logic to extract persons with raised hands
                 # This is kept here for compatibility; in async flow, detector.detect() is used
@@ -73,12 +135,10 @@ def evaluate_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     if dims != [17, 2] or len(kp_data) != 34 or len(point_names) != 17:
                         continue
 
-                    bbox_x: float = obj.get("x", 0)
-                    bbox_y: float = obj.get("y", 0)
-                    bbox_w: float = obj.get("w", 1)
-                    bbox_h: float = obj.get("h", 1)
-
-                    from pose_detector import extract_keypoint_coords, compute_frame_keypoints
+                    bbox = extract_bbox_pixels(obj, frame_width, frame_height)
+                    if bbox is None:
+                        continue
+                    bbox_x, bbox_y, bbox_w, bbox_h = bbox
 
                     eye_l = extract_keypoint_coords(point_names, kp_data, "eye_l")
                     eye_r = extract_keypoint_coords(point_names, kp_data, "eye_r")
@@ -103,9 +163,17 @@ def evaluate_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 event = {
                     "frame_index": frame_idx,
                     "timestamp": frame.get("timestamp", 0),
-                    "detection_time": time.time(),
+                    "detection_time": _compute_detection_time(
+                        frame.get("timestamp"),
+                        startup_wall_time=effective_startup_wall_time,
+                        fallback_wall_time=fallback_wall_time,
+                    ),
                     "num_people_detected": len(frame.get("objects", [])),
                     "num_with_hands_raised": len(persons),
+                    "frame_resolution": {
+                        "width": frame_width,
+                        "height": frame_height,
+                    },
                     "persons_with_raised_hands": persons,
                 }
                 positive_events.append(event)
@@ -200,6 +268,7 @@ async def main() -> None:
     shutdown_event = asyncio.Event()
     loop = asyncio.get_event_loop()
     start_time = time.time()
+    startup_wall_time = start_time
 
     def handle_signal(signame: str) -> None:
         """Signal handler for graceful shutdown."""
@@ -226,7 +295,7 @@ async def main() -> None:
                 break
 
             # Evaluate frames for raised hands
-            events = evaluate_frames(frame_list)
+            events = evaluate_frames(frame_list, startup_wall_time=startup_wall_time)
 
             # Write events to JSONL
             if events:

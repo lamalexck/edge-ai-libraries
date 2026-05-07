@@ -35,6 +35,13 @@ SKELETON_CONNECTIONS: list[tuple[str, str, tuple[int, int, int]]] = [
     ("elbow_l", "shoulder_l", (0, 255, 0)),
     ("wrist_r", "elbow_r", (0, 255, 0)),
     ("elbow_r", "shoulder_r", (0, 255, 0)),
+    # Red (BGR)
+    ("shoulder_l", "shoulder_r", (0, 0, 255)),
+    ("shoulder_l", "hip_l", (0, 0, 255)),
+    ("shoulder_r", "hip_r", (0, 0, 255)),
+    ("hip_l", "hip_r", (0, 0, 255)),
+    ("shoulder_r", "hip_l", (0, 0, 255)),
+    ("shoulder_l", "hip_r", (0, 0, 255)),
 ]
 
 
@@ -101,11 +108,88 @@ def compute_frame_keypoints(
     return result
 
 
+def extract_frame_resolution(frame: dict[str, Any]) -> tuple[int, int] | None:
+    """Extract frame width and height from the MQTT frame payload."""
+    resolution = frame.get("resolution")
+    if not isinstance(resolution, dict):
+        return None
+
+    try:
+        frame_width = int(resolution["width"])
+        frame_height = int(resolution["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    if frame_width <= 0 or frame_height <= 0:
+        return None
+
+    return frame_width, frame_height
+
+
+def extract_bbox_pixels(
+    obj: dict[str, Any],
+    frame_width: int | None = None,
+    frame_height: int | None = None,
+) -> tuple[float, float, float, float] | None:
+    """Return a person's bbox in frame pixels.
+
+    Prefers normalized detection.bounding_box coordinates when frame resolution is
+    available. Falls back to absolute x/y/w/h fields for backward compatibility.
+    """
+    detection_bbox = obj.get("detection", {}).get("bounding_box")
+    if (
+        isinstance(detection_bbox, dict)
+        and frame_width is not None
+        and frame_height is not None
+    ):
+        try:
+            x_min = float(detection_bbox["x_min"])
+            x_max = float(detection_bbox["x_max"])
+            y_min = float(detection_bbox["y_min"])
+            y_max = float(detection_bbox["y_max"])
+        except (KeyError, TypeError, ValueError):
+            detection_bbox = None
+        else:
+            bbox_x = round(x_min * frame_width, 2)
+            bbox_y = round(y_min * frame_height, 2)
+            bbox_w = round((x_max - x_min) * frame_width, 2)
+            bbox_h = round((y_max - y_min) * frame_height, 2)
+            if bbox_w > 0 and bbox_h > 0:
+                return bbox_x, bbox_y, bbox_w, bbox_h
+
+    try:
+        bbox_x = float(obj.get("x", 0))
+        bbox_y = float(obj.get("y", 0))
+        bbox_w = float(obj.get("w", 0))
+        bbox_h = float(obj.get("h", 0))
+    except (TypeError, ValueError):
+        return None
+
+    if bbox_w <= 0 or bbox_h <= 0:
+        return None
+
+    return bbox_x, bbox_y, bbox_w, bbox_h
+
+
 def _clamp_point(x: int, y: int, width: int, height: int) -> tuple[int, int]:
     """Clamp a point to image bounds."""
     clamped_x = max(0, min(width - 1, x))
     clamped_y = max(0, min(height - 1, y))
     return clamped_x, clamped_y
+
+
+def _draw_skeleton(image: np.ndarray, points: dict[str, tuple[int, int]]) -> None:
+    """Draw skeleton connections and keypoints onto an image."""
+    height, width = image.shape[:2]
+
+    for p1_name, p2_name, color in SKELETON_CONNECTIONS:
+        if p1_name in points and p2_name in points:
+            p1 = _clamp_point(*points[p1_name], width, height)
+            p2 = _clamp_point(*points[p2_name], width, height)
+            cv2.line(image, p1, p2, color, 2)
+
+    for point in points.values():
+        cv2.circle(image, _clamp_point(*point, width, height), 3, (255, 255, 255), -1)
 
 
 def render_person_keypoints_png(person: dict[str, Any], output_file: str | Path) -> Path:
@@ -148,12 +232,47 @@ def render_person_keypoints_png(person: dict[str, Any], output_file: str | Path)
         local_y = frame_y - int(round(bbox_y))
         local_points[name] = _clamp_point(local_x, local_y, bbox_w, bbox_h)
 
-    for p1_name, p2_name, color in SKELETON_CONNECTIONS:
-        if p1_name in local_points and p2_name in local_points:
-            cv2.line(image, local_points[p1_name], local_points[p2_name], color, 2)
+    _draw_skeleton(image, local_points)
 
-    for point in local_points.values():
-        cv2.circle(image, point, 3, (255, 255, 255), -1)
+    write_ok = cv2.imwrite(str(output_path), image)
+    if not write_ok:
+        raise IOError(f"Failed to write PNG: {output_path}")
+
+    return output_path
+
+
+def render_event_keypoints_png(event: dict[str, Any], output_file: str | Path) -> Path:
+    """Render all raised-hand persons for one event onto a full-frame PNG."""
+    resolution = event.get("frame_resolution", {})
+    frame_width = int(resolution.get("width", 0))
+    frame_height = int(resolution.get("height", 0))
+
+    if frame_width <= 0 or frame_height <= 0:
+        max_x = 0
+        max_y = 0
+        for person in event.get("persons_with_raised_hands", []):
+            for coords in person.get("keypoints", {}).values():
+                max_x = max(max_x, int(round(float(coords.get("x", 0)))))
+                max_y = max(max_y, int(round(float(coords.get("y", 0)))))
+        frame_width = max_x + 1
+        frame_height = max_y + 1
+
+    if frame_width <= 0 or frame_height <= 0:
+        raise ValueError("Event is missing usable frame resolution and keypoints")
+
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    image = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+
+    for person in event.get("persons_with_raised_hands", []):
+        frame_points: dict[str, tuple[int, int]] = {}
+        for name, coords in person.get("keypoints", {}).items():
+            frame_points[name] = (
+                int(round(float(coords["x"]))),
+                int(round(float(coords["y"]))),
+            )
+        _draw_skeleton(image, frame_points)
 
     write_ok = cv2.imwrite(str(output_path), image)
     if not write_ok:
@@ -167,7 +286,7 @@ def render_raised_hands_pngs_from_event_json(
     output_dir: str | Path,
 ) -> list[Path]:
     """
-    Render one PNG per raised-hand person from event JSON.
+    Render one PNG per event from event JSON.
 
     Args:
         input_json: Event JSON path, single event dict, or list of events.
@@ -195,18 +314,17 @@ def render_raised_hands_pngs_from_event_json(
     created: list[Path] = []
     for event in events:
         frame_index = event.get("frame_index", 0)
-        persons = event.get("persons_with_raised_hands", [])
-        for person in persons:
-            region_id = person.get("region_id", "unknown")
-            base_name = f"frame_{frame_index}_region_{region_id}.png"
-            candidate = out_dir / base_name
-            suffix = 1
-            while candidate.exists():
-                candidate = out_dir / f"frame_{frame_index}_region_{region_id}_{suffix}.png"
-                suffix += 1
+        if not event.get("persons_with_raised_hands"):
+            continue
 
-            render_person_keypoints_png(person, candidate)
-            created.append(candidate)
+        candidate = out_dir / f"frame_{frame_index}.png"
+        suffix = 1
+        while candidate.exists():
+            candidate = out_dir / f"frame_{frame_index}_{suffix}.png"
+            suffix += 1
+
+        render_event_keypoints_png(event, candidate)
+        created.append(candidate)
 
     return created
 
@@ -274,10 +392,14 @@ class RaisedHandDetector(PoseDetector):
                 )
                 continue
 
-            bbox_x: float = obj.get("x", 0)
-            bbox_y: float = obj.get("y", 0)
-            bbox_w: float = obj.get("w", 1)
-            bbox_h: float = obj.get("h", 1)
+            frame_resolution = extract_frame_resolution(frame)
+            frame_width = frame_resolution[0] if frame_resolution else None
+            frame_height = frame_resolution[1] if frame_resolution else None
+            bbox = extract_bbox_pixels(obj, frame_width, frame_height)
+            if bbox is None:
+                logger.warning(f"Invalid bbox for region_id {obj.get('region_id')}")
+                continue
+            bbox_x, bbox_y, bbox_w, bbox_h = bbox
 
             eye_l = extract_keypoint_coords(point_names, kp_data, "eye_l")
             eye_r = extract_keypoint_coords(point_names, kp_data, "eye_r")
