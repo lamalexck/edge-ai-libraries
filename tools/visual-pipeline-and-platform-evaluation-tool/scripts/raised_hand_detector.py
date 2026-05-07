@@ -18,11 +18,16 @@ import asyncio
 import functools
 import json
 import logging
+import os
+import queue
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
+
+from dotenv import load_dotenv
 
 from event_writer import EventWriter
 from mqtt_subscriber import MQTTSubscriber
@@ -37,6 +42,158 @@ from pose_detector import (
 from telegram_bot import TelegramBot
 
 logger = logging.getLogger(__name__)
+
+FRAME_QUEUE_MAX_SIZE = 128
+EVENT_QUEUE_MAX_SIZE = 256
+SENTINEL: object = object()
+
+
+def _put_with_drop_oldest(
+    target_queue: queue.Queue[Any],
+    item: Any,
+    queue_name: str,
+    dropped_counter: dict[str, int],
+) -> None:
+    """Insert item into bounded queue, dropping oldest entry when full."""
+    while True:
+        try:
+            target_queue.put_nowait(item)
+            return
+        except queue.Full:
+            try:
+                target_queue.get_nowait()
+                dropped_counter["count"] += 1
+                logger.warning(
+                    "Dropped oldest %s batch due to backpressure (total_dropped=%d)",
+                    queue_name,
+                    dropped_counter["count"],
+                )
+            except queue.Empty:
+                continue
+
+
+def _mqtt_ingest_worker(
+    mqtt_sub: MQTTSubscriber,
+    frame_queue: queue.Queue[Any],
+    shutdown_event: threading.Event,
+    frame_drop_counter: dict[str, int],
+    worker_errors: queue.Queue[Exception],
+) -> None:
+    """MQTT thread that ingests frame batches and pushes them to queue."""
+
+    async def _run() -> None:
+        async for frame_list in mqtt_sub.listen_for_messages():
+            if shutdown_event.is_set():
+                break
+            _put_with_drop_oldest(
+                target_queue=frame_queue,
+                item=frame_list,
+                queue_name="frame",
+                dropped_counter=frame_drop_counter,
+            )
+
+    try:
+        asyncio.run(_run())
+    except Exception as exc:
+        worker_errors.put(exc)
+        shutdown_event.set()
+    finally:
+        _put_with_drop_oldest(
+            target_queue=frame_queue,
+            item=SENTINEL,
+            queue_name="frame",
+            dropped_counter=frame_drop_counter,
+        )
+
+
+def _evaluation_worker(
+    frame_queue: queue.Queue[Any],
+    event_queue: queue.Queue[Any],
+    startup_wall_time: float,
+    rate_limit_seconds: float,
+    shutdown_event: threading.Event,
+    event_drop_counter: dict[str, int],
+    worker_errors: queue.Queue[Exception],
+) -> None:
+    """Frame evaluation thread that translates frames into events."""
+    last_detection_time: float | None = None
+    try:
+        while not shutdown_event.is_set():
+            try:
+                frame_list = frame_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            if frame_list is SENTINEL:
+                break
+
+            events = evaluate_frames(frame_list, startup_wall_time=startup_wall_time)
+            if events:
+                if rate_limit_seconds > 0 and last_detection_time is not None:
+                    earliest = min(e["detection_time"] for e in events)
+                    elapsed = earliest - last_detection_time
+                    if elapsed < rate_limit_seconds:
+                        logger.debug(
+                            "Rate-limiting: suppressing %d event(s), %.2fs since last detection (limit=%.1fs)",
+                            len(events),
+                            elapsed,
+                            rate_limit_seconds,
+                        )
+                        continue
+                last_detection_time = max(e["detection_time"] for e in events)
+                _put_with_drop_oldest(
+                    target_queue=event_queue,
+                    item=events,
+                    queue_name="event",
+                    dropped_counter=event_drop_counter,
+                )
+    except Exception as exc:
+        worker_errors.put(exc)
+        shutdown_event.set()
+    finally:
+        _put_with_drop_oldest(
+            target_queue=event_queue,
+            item=SENTINEL,
+            queue_name="event",
+            dropped_counter=event_drop_counter,
+        )
+
+
+def _output_worker(
+    event_queue: queue.Queue[Any],
+    writer: EventWriter,
+    notifier: NotificationManager,
+    telegram_bot: Optional[TelegramBot],
+    shutdown_event: threading.Event,
+    worker_errors: queue.Queue[Exception],
+) -> None:
+    """Output thread that persists events and dispatches notifications."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        while not shutdown_event.is_set():
+            try:
+                events = event_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            if events is SENTINEL:
+                break
+
+            loop.run_until_complete(writer.append_events(events))
+
+            if telegram_bot:
+                for event in events:
+                    loop.run_until_complete(notifier.notify_event(event, telegram_bot))
+            else:
+                for event in events:
+                    num_raised = event.get("num_with_hands_raised", 0)
+                    logger.info("Detection: %s people with raised hands", num_raised)
+    except Exception as exc:
+        worker_errors.put(exc)
+        shutdown_event.set()
+    finally:
+        loop.close()
 
 
 def _frame_timestamp_to_seconds(frame_timestamp: Any) -> float | None:
@@ -81,8 +238,19 @@ def _compute_detection_time(
 
     # If metadata is already epoch-based, use it directly.
     if 946684800 <= timestamp_seconds <= 4102444800:
+        logger.debug(
+            "Timestamp conversion path=epoch_passthrough mqtt_timestamp=%s interpreted_seconds=%.6f",
+            frame_timestamp,
+            timestamp_seconds,
+        )
         return timestamp_seconds
 
+    logger.debug(
+        "Timestamp conversion path=startup_offset mqtt_timestamp=%s interpreted_offset_seconds=%.6f startup_wall_time=%.6f",
+        frame_timestamp,
+        timestamp_seconds,
+        startup_wall_time,
+    )
     return startup_wall_time + timestamp_seconds
 
 
@@ -160,14 +328,16 @@ def evaluate_frames(
                         })
 
             if persons:
+                mqtt_timestamp = frame.get("timestamp", 0)
+                computed_detection_time = _compute_detection_time(
+                    mqtt_timestamp,
+                    startup_wall_time=effective_startup_wall_time,
+                    fallback_wall_time=fallback_wall_time,
+                )
                 event = {
                     "frame_index": frame_idx,
-                    "timestamp": frame.get("timestamp", 0),
-                    "detection_time": _compute_detection_time(
-                        frame.get("timestamp"),
-                        startup_wall_time=effective_startup_wall_time,
-                        fallback_wall_time=fallback_wall_time,
-                    ),
+                    "timestamp": mqtt_timestamp,
+                    "detection_time": computed_detection_time,
                     "num_people_detected": len(frame.get("objects", [])),
                     "num_with_hands_raised": len(persons),
                     "frame_resolution": {
@@ -178,8 +348,11 @@ def evaluate_frames(
                 }
                 positive_events.append(event)
                 logger.info(
-                    f"Positive detection in frame {frame_idx}: "
-                    f"{len(persons)} people with hands raised"
+                    "Positive detection frame_index=%d people_with_hands_raised=%d mqtt_timestamp=%s computed_detection_time=%.6f",
+                    frame_idx,
+                    len(persons),
+                    mqtt_timestamp,
+                    computed_detection_time,
                 )
         except Exception as e:
             logger.error(f"Error evaluating frame {frame_idx}: {e}")
@@ -230,15 +403,37 @@ async def main() -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
+    # Load .env from cwd or script directory so all os.getenv() calls see it
+    for _env_candidate in (Path(".") / ".env", Path(__file__).resolve().with_name(".env")):
+        if _env_candidate.exists():
+            load_dotenv(_env_candidate)
+            logger.debug("Loaded env from %s", _env_candidate)
+            break
+
     logger.info("=" * 60)
     logger.info("Raised Hand Detector (Async MQTT + Pose Analysis)")
     logger.info("=" * 60)
-    
+
     # Initialize components
     mqtt_sub = MQTTSubscriber()
     logger.info(f"MQTT Broker: {mqtt_sub.broker_host}:{mqtt_sub.broker_port}")
     logger.info(f"Topic: {mqtt_sub.topic}")
     logger.info(f"Output: {args.output_json}")
+
+    _rate_limit_raw = os.getenv("DETECTION_RATE_LIMIT_SECONDS", "5")
+    try:
+        rate_limit_seconds = float(_rate_limit_raw)
+        if rate_limit_seconds < 0:
+            raise ValueError("negative value")
+    except ValueError:
+        logger.warning(
+            "Invalid DETECTION_RATE_LIMIT_SECONDS=%r, using default 5s", _rate_limit_raw
+        )
+        rate_limit_seconds = 5.0
+    if rate_limit_seconds == 0:
+        logger.info("Detection rate limit: disabled")
+    else:
+        logger.info("Detection rate limit: %.1f seconds", rate_limit_seconds)
     
     detector = RaisedHandDetector()
     notifier = NotificationManager()
@@ -265,10 +460,15 @@ async def main() -> None:
     logger.info("=" * 60)
 
     # Setup shutdown event for graceful termination
-    shutdown_event = asyncio.Event()
+    shutdown_event = threading.Event()
     loop = asyncio.get_event_loop()
     start_time = time.time()
     startup_wall_time = start_time
+    frame_queue: queue.Queue[Any] = queue.Queue(maxsize=FRAME_QUEUE_MAX_SIZE)
+    event_queue: queue.Queue[Any] = queue.Queue(maxsize=EVENT_QUEUE_MAX_SIZE)
+    frame_drop_counter = {"count": 0}
+    event_drop_counter = {"count": 0}
+    worker_errors: queue.Queue[Exception] = queue.Queue()
 
     def handle_signal(signame: str) -> None:
         """Signal handler for graceful shutdown."""
@@ -282,40 +482,78 @@ async def main() -> None:
             functools.partial(handle_signal, signame)
         )
 
-    # Main event loop
+    ingest_thread = threading.Thread(
+        target=_mqtt_ingest_worker,
+        name="mqtt-ingest",
+        args=(mqtt_sub, frame_queue, shutdown_event, frame_drop_counter, worker_errors),
+        daemon=True,
+    )
+    eval_thread = threading.Thread(
+        target=_evaluation_worker,
+        name="frame-eval",
+        args=(
+            frame_queue,
+            event_queue,
+            startup_wall_time,
+            rate_limit_seconds,
+            shutdown_event,
+            event_drop_counter,
+            worker_errors,
+        ),
+        daemon=True,
+    )
+    output_thread = threading.Thread(
+        target=_output_worker,
+        name="event-output",
+        args=(
+            event_queue,
+            writer,
+            notifier,
+            telegram_bot,
+            shutdown_event,
+            worker_errors,
+        ),
+        daemon=True,
+    )
+
+    ingest_thread.start()
+    eval_thread.start()
+    output_thread.start()
+
+    # Main supervision loop
     try:
-        async for frame_list in mqtt_sub.listen_for_messages():
-            # Check duration timeout
+        while not shutdown_event.is_set():
             if args.duration and (time.time() - start_time) >= args.duration:
                 logger.info(f"Duration {args.duration}s exceeded. Shutting down...")
                 shutdown_event.set()
-
-            # Check shutdown signal
-            if shutdown_event.is_set():
                 break
 
-            # Evaluate frames for raised hands
-            events = evaluate_frames(frame_list, startup_wall_time=startup_wall_time)
+            if not worker_errors.empty():
+                raise worker_errors.get()
 
-            # Write events to JSONL
-            if events:
-                await writer.append_events(events)
+            if not ingest_thread.is_alive() and frame_queue.empty():
+                logger.info("MQTT ingest thread completed")
+                shutdown_event.set()
+                break
 
-            # Send notifications for each event
-            if events and telegram_bot:
-                for event in events:
-                    await notifier.notify_event(event, telegram_bot)
-            elif events:
-                # Log detections if no Telegram bot
-                for event in events:
-                    num_raised = event.get("num_with_hands_raised", 0)
-                    logger.info(f"Detection: {num_raised} people with raised hands")
+            await asyncio.sleep(0.2)
 
     except asyncio.CancelledError:
         logger.info("Task cancelled, initiating shutdown...")
     except Exception as e:
         logger.error(f"Error in main loop: {e}", exc_info=True)
     finally:
+        shutdown_event.set()
+        _put_with_drop_oldest(frame_queue, SENTINEL, "frame", frame_drop_counter)
+        _put_with_drop_oldest(event_queue, SENTINEL, "event", event_drop_counter)
+        ingest_thread.join(timeout=2.0)
+        eval_thread.join(timeout=2.0)
+        output_thread.join(timeout=2.0)
+        logger.info(
+            "Queue stats: frame_dropped=%d event_dropped=%d",
+            frame_drop_counter["count"],
+            event_drop_counter["count"],
+        )
         logger.info("Graceful shutdown complete.")
 
 
