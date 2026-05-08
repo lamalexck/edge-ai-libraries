@@ -22,27 +22,33 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+SKELETON_LINE_THICKNESS = 20
+KEYPOINT_RADIUS = 10
+KEYPOINT_COLOR = (241, 241, 241)
+PNG_BACKGROUND_COLOR = (210, 210, 210)
+
+
 SKELETON_CONNECTIONS: list[tuple[str, str, tuple[int, int, int]]] = [
+    # Red (BGR)
+    ("ear_l", "eye_l", (0, 0, 255)),
+    ("eye_l", "nose", (0, 0, 255)),
+    ("nose", "eye_r", (0, 0, 255)),
+    ("eye_r", "ear_r", (0, 0, 255)),
     # Yellow (BGR)
-    ("ear_l", "eye_l", (0, 255, 255)),
-    ("eye_l", "nose", (0, 255, 255)),
-    ("nose", "eye_r", (0, 255, 255)),
-    ("eye_r", "ear_r", (0, 255, 255)),
-    # Blue (BGR)
-    ("ear_l", "shoulder_l", (255, 0, 0)),
-    ("ear_r", "shoulder_r", (255, 0, 0)),
+    ("ear_l", "shoulder_l", (0, 255, 255)),
+    ("ear_r", "shoulder_r", (0, 255, 255)),
     # Green (BGR)
     ("wrist_l", "elbow_l", (0, 255, 0)),
     ("elbow_l", "shoulder_l", (0, 255, 0)),
     ("wrist_r", "elbow_r", (0, 255, 0)),
     ("elbow_r", "shoulder_r", (0, 255, 0)),
-    # Red (BGR)
-    ("shoulder_l", "shoulder_r", (0, 0, 255)),
-    ("shoulder_l", "hip_l", (0, 0, 255)),
-    ("shoulder_r", "hip_r", (0, 0, 255)),
-    ("hip_l", "hip_r", (0, 0, 255)),
-    ("shoulder_r", "hip_l", (0, 0, 255)),
-    ("shoulder_l", "hip_r", (0, 0, 255)),
+    # Blue (BGR)
+    ("shoulder_l", "shoulder_r", (255, 0, 0)),
+    ("shoulder_l", "hip_l", (255, 0, 0)),
+    ("shoulder_r", "hip_r", (255, 0, 0)),
+    ("hip_l", "hip_r", (255, 0, 0)),
+    ("shoulder_r", "hip_l", (255, 0, 0)),
+    ("shoulder_l", "hip_r", (255, 0, 0)),
 ]
 
 
@@ -187,10 +193,16 @@ def _draw_skeleton(image: np.ndarray, points: dict[str, tuple[int, int]]) -> Non
         if p1_name in points and p2_name in points:
             p1 = _clamp_point(*points[p1_name], width, height)
             p2 = _clamp_point(*points[p2_name], width, height)
-            cv2.line(image, p1, p2, color, 2)
+            cv2.line(image, p1, p2, color, SKELETON_LINE_THICKNESS)
 
     for point in points.values():
-        cv2.circle(image, _clamp_point(*point, width, height), 3, (255, 255, 255), -1)
+        cv2.circle(
+            image,
+            _clamp_point(*point, width, height),
+            KEYPOINT_RADIUS,
+            KEYPOINT_COLOR,
+            -1,
+        )
 
 
 def render_person_keypoints_png(person: dict[str, Any], output_file: str | Path) -> Path:
@@ -223,7 +235,7 @@ def render_person_keypoints_png(person: dict[str, Any], output_file: str | Path)
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    image = np.zeros((bbox_h, bbox_w, 3), dtype=np.uint8)
+    image = np.full((bbox_h, bbox_w, 3), PNG_BACKGROUND_COLOR, dtype=np.uint8)
 
     local_points: dict[str, tuple[int, int]] = {}
     for name, coords in keypoints.items():
@@ -264,7 +276,11 @@ def render_event_keypoints_png(event: dict[str, Any], output_file: str | Path) -
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    image = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+    image = np.full(
+        (frame_height, frame_width, 3),
+        PNG_BACKGROUND_COLOR,
+        dtype=np.uint8,
+    )
 
     persons_to_render = [
         *event.get("persons_with_raised_hands", []),

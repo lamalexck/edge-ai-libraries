@@ -178,6 +178,7 @@ def test_render_raised_hands_pngs_from_event_json_creates_one_full_frame_png(tmp
     assert image is not None
     assert image.shape[0] == 240
     assert image.shape[1] == 320
+    assert tuple(int(channel) for channel in image[0, 0]) == (64, 64, 64)
     assert image[70, 50].any()
     assert image[165, 160].any()
 
