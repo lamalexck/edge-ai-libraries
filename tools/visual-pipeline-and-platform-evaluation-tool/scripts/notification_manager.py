@@ -42,15 +42,25 @@ class NotificationManager:
         """
         try:
             num_raised = event.get("num_with_hands_raised", 0)
-            if num_raised == 0:
-                logger.debug("Skipping event with no raised hands detected")
+            num_crossed = event.get("num_with_crossed_forearms", 0)
+            if num_raised == 0 and num_crossed == 0:
+                logger.debug("Skipping event with no detected poses")
                 return
 
             # Build caption with title and timestamp
             detection_time = event.get("detection_time", time.time())
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(detection_time))
+            poses = event.get("poses", [])
+            if poses:
+                pose_summary = ", ".join(
+                    f"{pose.get('pose_type', 'unknown')}: {pose.get('num_detected', 0)}"
+                    for pose in poses
+                )
+            else:
+                pose_summary = f"raised_hands: {num_raised}, crossed_forearms: {num_crossed}"
             caption = (
-                "<b>Raised Hands Detected</b>\n"
+                "<b>Pose Detected</b>\n"
+                f"Poses: {pose_summary}\n"
                 f"Time: {timestamp}"
             )
 
@@ -58,7 +68,7 @@ class NotificationManager:
                 # Log detection if no Telegram bot
                 logger.info(
                     f"Detection event (no Telegram): "
-                    f"{num_raised} people with raised hands at {timestamp}"
+                    f"raised_hands={num_raised} crossed_forearms={num_crossed} at {timestamp}"
                 )
                 return
 
@@ -77,7 +87,7 @@ class NotificationManager:
                             caption,
                         )
                         logger.info(
-                            f"Sent {num_raised} raised hands notification to Telegram"
+                            f"Sent pose notification to Telegram (raised_hands={num_raised} crossed_forearms={num_crossed})"
                         )
                     else:
                         logger.warning("No PNG images generated for event")

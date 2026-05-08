@@ -11,6 +11,7 @@ This module provides an extensible pose detection architecture:
 import asyncio
 import json
 import logging
+import math
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -242,7 +243,7 @@ def render_person_keypoints_png(person: dict[str, Any], output_file: str | Path)
 
 
 def render_event_keypoints_png(event: dict[str, Any], output_file: str | Path) -> Path:
-    """Render all raised-hand persons for one event onto a full-frame PNG."""
+    """Render all detected persons for one event onto a full-frame PNG."""
     resolution = event.get("frame_resolution", {})
     frame_width = int(resolution.get("width", 0))
     frame_height = int(resolution.get("height", 0))
@@ -265,7 +266,12 @@ def render_event_keypoints_png(event: dict[str, Any], output_file: str | Path) -
 
     image = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
 
-    for person in event.get("persons_with_raised_hands", []):
+    persons_to_render = [
+        *event.get("persons_with_raised_hands", []),
+        *event.get("persons_with_crossed_forearms", []),
+    ]
+
+    for person in persons_to_render:
         frame_points: dict[str, tuple[int, int]] = {}
         for name, coords in person.get("keypoints", {}).items():
             frame_points[name] = (
@@ -314,7 +320,11 @@ def render_raised_hands_pngs_from_event_json(
     created: list[Path] = []
     for event in events:
         frame_index = event.get("frame_index", 0)
-        if not event.get("persons_with_raised_hands"):
+        persons_to_render = [
+            *event.get("persons_with_raised_hands", []),
+            *event.get("persons_with_crossed_forearms", []),
+        ]
+        if not persons_to_render:
             continue
 
         candidate = out_dir / f"frame_{frame_index}.png"
@@ -421,5 +431,109 @@ class RaisedHandDetector(PoseDetector):
                         kp_data, point_names, bbox_x, bbox_y, bbox_w, bbox_h
                     ),
                 })
+
+        return persons
+
+
+def _segments_intersect(
+    a1: tuple[float, float],
+    a2: tuple[float, float],
+    b1: tuple[float, float],
+    b2: tuple[float, float],
+) -> bool:
+    """Return True when two 2D line segments intersect strictly."""
+
+    def _orientation(
+        p: tuple[float, float], q: tuple[float, float], r: tuple[float, float]
+    ) -> float:
+        return (q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1])
+
+    o1 = _orientation(a1, a2, b1)
+    o2 = _orientation(a1, a2, b2)
+    o3 = _orientation(b1, b2, a1)
+    o4 = _orientation(b1, b2, a2)
+
+    # Hybrid strategy part 1: strict intersection only.
+    return (o1 > 0) != (o2 > 0) and (o3 > 0) != (o4 > 0)
+
+
+class CrossedForearmDetector(PoseDetector):
+    """Detector for persons crossing their forearms in front of the body."""
+
+    MIN_FOREARM_LENGTH_NORM = 0.05
+
+    async def detect(self, frame: dict[str, Any]) -> list[dict[str, Any]]:
+        """Detect crossed-forearm pose using a hybrid geometry rule.
+
+        Strategy:
+        - Primary condition: segment(wrist_r, elbow_r) intersects segment(wrist_l, elbow_l)
+        - Sanity checks: minimum forearm lengths to reduce false positives
+        """
+        persons: list[dict[str, Any]] = []
+
+        if "objects" not in frame:
+            raise KeyError("frame must contain 'objects' key")
+
+        frame_resolution = extract_frame_resolution(frame)
+        frame_width = frame_resolution[0] if frame_resolution else None
+        frame_height = frame_resolution[1] if frame_resolution else None
+
+        for obj in frame["objects"]:
+            keypoints_tensor = None
+            for tensor in obj.get("tensors", []):
+                if tensor.get("name") == "keypoints" and tensor.get("format") == "keypoints":
+                    keypoints_tensor = tensor
+                    break
+
+            if not keypoints_tensor:
+                continue
+
+            kp_data = keypoints_tensor.get("data", [])
+            point_names = keypoints_tensor.get("point_names", [])
+            dims = keypoints_tensor.get("dims", [])
+
+            if dims != [17, 2] or len(kp_data) != 34 or len(point_names) != 17:
+                continue
+
+            bbox = extract_bbox_pixels(obj, frame_width, frame_height)
+            if bbox is None:
+                continue
+            bbox_x, bbox_y, bbox_w, bbox_h = bbox
+
+            wrist_l = extract_keypoint_coords(point_names, kp_data, "wrist_l")
+            wrist_r = extract_keypoint_coords(point_names, kp_data, "wrist_r")
+            elbow_l = extract_keypoint_coords(point_names, kp_data, "elbow_l")
+            elbow_r = extract_keypoint_coords(point_names, kp_data, "elbow_r")
+
+            if not all([wrist_l, wrist_r, elbow_l, elbow_r]):
+                continue
+
+            # Hybrid strategy part 2: pose sanity checks.
+            forearm_l_len = math.hypot(wrist_l[0] - elbow_l[0], wrist_l[1] - elbow_l[1])
+            forearm_r_len = math.hypot(wrist_r[0] - elbow_r[0], wrist_r[1] - elbow_r[1])
+
+            if (
+                forearm_l_len < self.MIN_FOREARM_LENGTH_NORM
+                or forearm_r_len < self.MIN_FOREARM_LENGTH_NORM
+            ):
+                continue
+
+            if not _segments_intersect(wrist_r, elbow_r, wrist_l, elbow_l):
+                continue
+
+            persons.append(
+                {
+                    "region_id": obj.get("region_id"),
+                    "bbox": {"x": bbox_x, "y": bbox_y, "w": bbox_w, "h": bbox_h},
+                    "keypoints": compute_frame_keypoints(
+                        kp_data,
+                        point_names,
+                        bbox_x,
+                        bbox_y,
+                        bbox_w,
+                        bbox_h,
+                    ),
+                }
+            )
 
         return persons

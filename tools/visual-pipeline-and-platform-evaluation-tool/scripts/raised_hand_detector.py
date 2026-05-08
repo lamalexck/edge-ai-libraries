@@ -33,11 +33,8 @@ from event_writer import EventWriter
 from mqtt_subscriber import MQTTSubscriber
 from notification_manager import NotificationManager
 from pose_detector import (
+    CrossedForearmDetector,
     RaisedHandDetector,
-    compute_frame_keypoints,
-    extract_bbox_pixels,
-    extract_frame_resolution,
-    extract_keypoint_coords,
 )
 from telegram_bot import TelegramBot
 
@@ -46,6 +43,45 @@ logger = logging.getLogger(__name__)
 FRAME_QUEUE_MAX_SIZE = 128
 EVENT_QUEUE_MAX_SIZE = 256
 SENTINEL: object = object()
+
+
+def _format_point(point: dict[str, Any] | None) -> str:
+    """Format keypoint dict to concise x,y string for logs."""
+    if not isinstance(point, dict):
+        return "n/a"
+    x = point.get("x")
+    y = point.get("y")
+    if x is None or y is None:
+        return "n/a"
+    return f"({x},{y})"
+
+
+def _log_crossed_forearm_debug(persons: list[dict[str, Any]]) -> None:
+    """Log keypoint coordinates for crossed-forearm positives to debug false positives."""
+    for person in persons:
+        keypoints = person.get("keypoints", {})
+        logger.debug(
+            "crossed_forearms debug region_id=%s wrist_r=%s wrist_l=%s elbow_l=%s elbow_r=%s",
+            person.get("region_id"),
+            _format_point(keypoints.get("wrist_r")),
+            _format_point(keypoints.get("wrist_l")),
+            _format_point(keypoints.get("elbow_l")),
+            _format_point(keypoints.get("elbow_r")),
+        )
+
+
+def _log_raised_hands_debug(persons: list[dict[str, Any]]) -> None:
+    """Log keypoint coordinates for raised-hand positives to debug classifications."""
+    for person in persons:
+        keypoints = person.get("keypoints", {})
+        logger.debug(
+            "raised_hands debug region_id=%s wrist_l=%s wrist_r=%s eye_l=%s eye_r=%s",
+            person.get("region_id"),
+            _format_point(keypoints.get("wrist_l")),
+            _format_point(keypoints.get("wrist_r")),
+            _format_point(keypoints.get("eye_l")),
+            _format_point(keypoints.get("eye_r")),
+        )
 
 
 def _put_with_drop_oldest(
@@ -121,6 +157,7 @@ def _evaluation_worker(
     event_queue: queue.Queue[Any],
     startup_wall_time: float,
     rate_limit_seconds: float,
+    enable_crossed_arm_detect: bool,
     shutdown_event: threading.Event,
     event_drop_counter: dict[str, int],
     worker_errors: queue.Queue[Exception],
@@ -168,6 +205,7 @@ def _evaluation_worker(
             events = evaluate_frames(
                 frame_list,
                 startup_wall_time=effective_startup_wall_time,
+                enable_crossed_arm_detect=enable_crossed_arm_detect,
             )
             if events:
                 if rate_limit_seconds > 0 and last_detection_time is not None:
@@ -234,8 +272,16 @@ def _output_worker(
                     loop.run_until_complete(notifier.notify_event(event, telegram_bot))
             else:
                 for event in events:
-                    num_raised = event.get("num_with_hands_raised", 0)
-                    logger.info("Detection: %s people with raised hands", num_raised)
+                    poses = event.get("poses", [])
+                    if poses:
+                        pose_summary = ",".join(
+                            f"{pose.get('pose_type')}={pose.get('num_detected', 0)}"
+                            for pose in poses
+                        )
+                        logger.info("Detection: %s", pose_summary)
+                    else:
+                        num_raised = event.get("num_with_hands_raised", 0)
+                        logger.info("Detection: %s people with raised hands", num_raised)
     except Exception as exc:
         worker_errors.put(exc)
         shutdown_event.set()
@@ -320,7 +366,9 @@ def _derive_relative_time_anchor(
 
 
 def evaluate_frames(
-    frames: list[dict[str, Any]], startup_wall_time: float | None = None
+    frames: list[dict[str, Any]],
+    startup_wall_time: float | None = None,
+    enable_crossed_arm_detect: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Evaluate each frame for raised hands and extract positive detections.
@@ -332,11 +380,17 @@ def evaluate_frames(
 
     Args:
         frames: List of frame objects.
+        startup_wall_time: Optional wall-clock startup anchor for relative timestamps.
+        enable_crossed_arm_detect: Whether crossed forearm detection is enabled.
 
     Returns:
         List of positive detection events (empty if no detections).
     """
     positive_events = []
+    raised_hands_detector = RaisedHandDetector()
+    crossed_forearm_detector = (
+        CrossedForearmDetector() if enable_crossed_arm_detect else None
+    )
     fallback_wall_time = time.time()
     effective_startup_wall_time = (
         startup_wall_time if startup_wall_time is not None else fallback_wall_time
@@ -344,78 +398,65 @@ def evaluate_frames(
 
     for frame_idx, frame in enumerate(frames):
         try:
-            persons = []
-            frame_resolution = extract_frame_resolution(frame)
-            frame_width = frame_resolution[0] if frame_resolution else None
-            frame_height = frame_resolution[1] if frame_resolution else None
-            if "objects" in frame:
-                # Use detector logic to extract persons with raised hands
-                # This is kept here for compatibility; in async flow, detector.detect() is used
-                for obj in frame.get("objects", []):
-                    keypoints_tensor = None
-                    for tensor in obj.get("tensors", []):
-                        if tensor.get("name") == "keypoints" and tensor.get("format") == "keypoints":
-                            keypoints_tensor = tensor
-                            break
+            if "objects" not in frame:
+                continue
 
-                    if not keypoints_tensor:
-                        continue
+            raised_hands_persons = asyncio.run(raised_hands_detector.detect(frame))
+            crossed_forearm_persons: list[dict[str, Any]] = []
+            if crossed_forearm_detector is not None:
+                crossed_forearm_persons = asyncio.run(crossed_forearm_detector.detect(frame))
 
-                    kp_data = keypoints_tensor.get("data", [])
-                    point_names = keypoints_tensor.get("point_names", [])
-                    dims = keypoints_tensor.get("dims", [])
-
-                    if dims != [17, 2] or len(kp_data) != 34 or len(point_names) != 17:
-                        continue
-
-                    bbox = extract_bbox_pixels(obj, frame_width, frame_height)
-                    if bbox is None:
-                        continue
-                    bbox_x, bbox_y, bbox_w, bbox_h = bbox
-
-                    eye_l = extract_keypoint_coords(point_names, kp_data, "eye_l")
-                    eye_r = extract_keypoint_coords(point_names, kp_data, "eye_r")
-                    wrist_l = extract_keypoint_coords(point_names, kp_data, "wrist_l")
-                    wrist_r = extract_keypoint_coords(point_names, kp_data, "wrist_r")
-
-                    if not all([eye_l, eye_r, wrist_l, wrist_r]):
-                        continue
-
-                    hands_raised = (wrist_l[1] < eye_l[1]) and (wrist_r[1] < eye_r[1])  # type: ignore[index]
-
-                    if hands_raised:
-                        persons.append({
-                            "region_id": obj.get("region_id"),
-                            "bbox": {"x": bbox_x, "y": bbox_y, "w": bbox_w, "h": bbox_h},
-                            "keypoints": compute_frame_keypoints(
-                                kp_data, point_names, bbox_x, bbox_y, bbox_w, bbox_h
-                            ),
-                        })
-
-            if persons:
+            if raised_hands_persons or crossed_forearm_persons:
                 mqtt_timestamp = frame.get("timestamp", 0)
                 computed_detection_time = _compute_detection_time(
                     mqtt_timestamp,
                     startup_wall_time=effective_startup_wall_time,
                     fallback_wall_time=fallback_wall_time,
                 )
+                frame_resolution = frame.get("resolution", {})
+                poses: list[dict[str, Any]] = []
+                if raised_hands_persons:
+                    poses.append(
+                        {
+                            "pose_type": "raised_hands",
+                            "num_detected": len(raised_hands_persons),
+                            "persons": raised_hands_persons,
+                        }
+                    )
+                if crossed_forearm_persons:
+                    poses.append(
+                        {
+                            "pose_type": "crossed_forearms",
+                            "num_detected": len(crossed_forearm_persons),
+                            "persons": crossed_forearm_persons,
+                        }
+                    )
+
                 event = {
                     "frame_index": frame_idx,
                     "timestamp": mqtt_timestamp,
                     "detection_time": computed_detection_time,
                     "num_people_detected": len(frame.get("objects", [])),
-                    "num_with_hands_raised": len(persons),
-                    "frame_resolution": {
-                        "width": frame_width,
-                        "height": frame_height,
-                    },
-                    "persons_with_raised_hands": persons,
+                    "frame_resolution": frame_resolution,
+                    "poses": poses,
+                    # Backward-compatible fields retained for existing consumers.
+                    "num_with_hands_raised": len(raised_hands_persons),
+                    "persons_with_raised_hands": raised_hands_persons,
+                    "num_with_crossed_forearms": len(crossed_forearm_persons),
+                    "persons_with_crossed_forearms": crossed_forearm_persons,
                 }
                 positive_events.append(event)
-                logger.info(
-                    "Positive detection %d person with hands raised",
-                    len(persons),
+                pose_summary = ",".join(
+                    f"{pose['pose_type']}={pose['num_detected']}" for pose in poses
                 )
+                logger.info(
+                    "Positive detection poses=%s",
+                    pose_summary,
+                )
+                if raised_hands_persons:
+                    _log_raised_hands_debug(raised_hands_persons)
+                if crossed_forearm_persons:
+                    _log_crossed_forearm_debug(crossed_forearm_persons)
         except Exception as e:
             logger.error(f"Error evaluating frame {frame_idx}: {e}")
 
@@ -451,6 +492,11 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Disable Telegram notifications even if TELEGRAM_* values exist in .env"
     )
+    parser.add_argument(
+        "--enable-crossed-arm-detect",
+        action="store_true",
+        help="Enable crossed forearm detection (default: disabled)"
+    )
 
     return parser.parse_args()
 
@@ -481,6 +527,10 @@ async def main() -> None:
     logger.info(f"MQTT Broker: {mqtt_sub.broker_host}:{mqtt_sub.broker_port}")
     logger.info(f"Topic: {mqtt_sub.topic}")
     logger.info(f"Output: {args.output_json}")
+    logger.info(
+        "Crossed forearm detection: %s",
+        "enabled" if args.enable_crossed_arm_detect else "disabled",
+    )
 
     _rate_limit_raw = os.getenv("DETECTION_RATE_LIMIT_SECONDS", "5")
     try:
@@ -558,6 +608,7 @@ async def main() -> None:
             event_queue,
             startup_wall_time,
             rate_limit_seconds,
+            args.enable_crossed_arm_detect,
             shutdown_event,
             event_drop_counter,
             worker_errors,

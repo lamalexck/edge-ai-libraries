@@ -55,6 +55,30 @@ def _raised_hands_keypoint_data() -> list[float]:
     ]
 
 
+def _crossed_forearms_keypoint_data() -> list[float]:
+    # Forearm-cross strategy checks segment(wrist_r, elbow_r) crossing segment(wrist_l, elbow_l).
+    # These points are chosen so the segments intersect.
+    return [
+        0.50, 0.30,  # nose
+        0.45, 0.28,  # eye_l
+        0.55, 0.28,  # eye_r
+        0.40, 0.30,  # ear_l
+        0.60, 0.30,  # ear_r
+        0.42, 0.45,  # shoulder_l
+        0.58, 0.45,  # shoulder_r
+        0.35, 0.50,  # elbow_l
+        0.65, 0.50,  # elbow_r
+        0.62, 0.60,  # wrist_l
+        0.38, 0.60,  # wrist_r
+        0.45, 0.75,  # hip_l
+        0.55, 0.75,  # hip_r
+        0.44, 0.88,  # knee_l
+        0.56, 0.88,  # knee_r
+        0.44, 0.98,  # ankle_l
+        0.56, 0.98,  # ankle_r
+    ]
+
+
 def test_evaluate_frames_uses_normalized_detection_bbox_and_preserves_resolution() -> None:
     frame = {
         "timestamp": 123,
@@ -154,6 +178,102 @@ def test_render_raised_hands_pngs_from_event_json_creates_one_full_frame_png(tmp
     assert image is not None
     assert image.shape[0] == 240
     assert image.shape[1] == 320
+    assert image[70, 50].any()
+    assert image[165, 160].any()
+
+
+def test_render_raised_hands_pngs_from_event_json_creates_png_for_crossed_forearms_only(
+    tmp_path,
+) -> None:
+    event = {
+        "frame_index": 8,
+        "frame_resolution": {"width": 320, "height": 240},
+        "persons_with_raised_hands": [],
+        "persons_with_crossed_forearms": [
+            {
+                "region_id": 21,
+                "bbox": {"x": 80, "y": 60, "w": 120, "h": 160},
+                "keypoints": {
+                    "nose": {"x": 140, "y": 90},
+                    "eye_l": {"x": 132, "y": 86},
+                    "eye_r": {"x": 148, "y": 86},
+                    "ear_l": {"x": 126, "y": 90},
+                    "ear_r": {"x": 154, "y": 90},
+                    "shoulder_l": {"x": 132, "y": 120},
+                    "shoulder_r": {"x": 148, "y": 120},
+                    "elbow_l": {"x": 120, "y": 140},
+                    "elbow_r": {"x": 160, "y": 140},
+                    "wrist_l": {"x": 156, "y": 170},
+                    "wrist_r": {"x": 124, "y": 170},
+                    "hip_l": {"x": 134, "y": 180},
+                    "hip_r": {"x": 146, "y": 180},
+                },
+            }
+        ],
+    }
+
+    created = render_raised_hands_pngs_from_event_json(event, tmp_path)
+
+    assert len(created) == 1
+    image = cv2.imread(str(created[0]))
+    assert image is not None
+    assert image[120, 132].any()
+
+
+def test_render_raised_hands_pngs_from_event_json_renders_mixed_pose_persons(tmp_path) -> None:
+    event = {
+        "frame_index": 9,
+        "frame_resolution": {"width": 320, "height": 240},
+        "persons_with_raised_hands": [
+            {
+                "region_id": 31,
+                "bbox": {"x": 0, "y": 0, "w": 120, "h": 160},
+                "keypoints": {
+                    "nose": {"x": 60, "y": 50},
+                    "eye_l": {"x": 52, "y": 45},
+                    "eye_r": {"x": 68, "y": 45},
+                    "ear_l": {"x": 45, "y": 48},
+                    "ear_r": {"x": 75, "y": 48},
+                    "shoulder_l": {"x": 50, "y": 70},
+                    "shoulder_r": {"x": 70, "y": 70},
+                    "elbow_l": {"x": 45, "y": 80},
+                    "elbow_r": {"x": 75, "y": 80},
+                    "wrist_l": {"x": 40, "y": 90},
+                    "wrist_r": {"x": 80, "y": 90},
+                    "hip_l": {"x": 52, "y": 110},
+                    "hip_r": {"x": 68, "y": 110},
+                },
+            }
+        ],
+        "persons_with_crossed_forearms": [
+            {
+                "region_id": 32,
+                "bbox": {"x": 100, "y": 80, "w": 140, "h": 180},
+                "keypoints": {
+                    "nose": {"x": 170, "y": 140},
+                    "eye_l": {"x": 162, "y": 135},
+                    "eye_r": {"x": 178, "y": 135},
+                    "ear_l": {"x": 155, "y": 138},
+                    "ear_r": {"x": 185, "y": 138},
+                    "shoulder_l": {"x": 160, "y": 165},
+                    "shoulder_r": {"x": 180, "y": 165},
+                    "elbow_l": {"x": 150, "y": 175},
+                    "elbow_r": {"x": 190, "y": 175},
+                    "wrist_l": {"x": 195, "y": 185},
+                    "wrist_r": {"x": 145, "y": 185},
+                    "hip_l": {"x": 162, "y": 205},
+                    "hip_r": {"x": 178, "y": 205},
+                },
+            }
+        ],
+    }
+
+    created = render_raised_hands_pngs_from_event_json(event, tmp_path)
+
+    assert len(created) == 1
+    image = cv2.imread(str(created[0]))
+    assert image is not None
+    # Verify content exists around both persons.
     assert image[70, 50].any()
     assert image[165, 160].any()
 
@@ -262,8 +382,124 @@ def test_evaluate_frames_logs_mqtt_and_computed_timestamps(caplog) -> None:
         evaluate_frames([frame], startup_wall_time=1_700_000_000.0)
 
     log_messages = "\n".join(record.message for record in caplog.records)
-    assert "Positive detection people_with_hands_raised=1" in log_messages
+    assert "Positive detection poses=raised_hands=1" in log_messages
     assert "frame_index=" not in log_messages
+
+
+def test_evaluate_frames_logs_raised_hands_debug_coordinates(caplog) -> None:
+    frame = {
+        "timestamp": 100_000_000,
+        "resolution": {"width": 200, "height": 100},
+        "objects": [
+            {
+                "region_id": 7,
+                "detection": {
+                    "bounding_box": {
+                        "x_min": 0.10,
+                        "x_max": 0.40,
+                        "y_min": 0.20,
+                        "y_max": 0.80,
+                    }
+                },
+                "tensors": [
+                    {
+                        "name": "keypoints",
+                        "format": "keypoints",
+                        "dims": [17, 2],
+                        "point_names": POINT_NAMES,
+                        "data": _raised_hands_keypoint_data(),
+                    }
+                ],
+            }
+        ],
+    }
+
+    with caplog.at_level("DEBUG"):
+        evaluate_frames([frame], startup_wall_time=1_700_000_000.0)
+
+    log_messages = "\n".join(record.message for record in caplog.records)
+    assert "raised_hands debug region_id=7" in log_messages
+    assert "wrist_l=(38.0,29.0)" in log_messages
+    assert "wrist_r=(62.0,29.0)" in log_messages
+    assert "eye_l=(47.0,36.8)" in log_messages
+    assert "eye_r=(53.0,36.8)" in log_messages
+
+
+def test_evaluate_frames_detects_crossed_forearms_pose() -> None:
+    frame = {
+        "timestamp": 100_000_000,
+        "resolution": {"width": 200, "height": 100},
+        "objects": [
+            {
+                "region_id": 11,
+                "detection": {
+                    "bounding_box": {
+                        "x_min": 0.10,
+                        "x_max": 0.40,
+                        "y_min": 0.20,
+                        "y_max": 0.80,
+                    }
+                },
+                "tensors": [
+                    {
+                        "name": "keypoints",
+                        "format": "keypoints",
+                        "dims": [17, 2],
+                        "point_names": POINT_NAMES,
+                        "data": _crossed_forearms_keypoint_data(),
+                    }
+                ],
+            }
+        ],
+    }
+
+    events = evaluate_frames(
+        [frame],
+        startup_wall_time=1_700_000_000.0,
+        enable_crossed_arm_detect=True,
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert "poses" in event
+    assert any(p["pose_type"] == "crossed_forearms" for p in event["poses"])
+    crossed_pose = next(p for p in event["poses"] if p["pose_type"] == "crossed_forearms")
+    assert crossed_pose["num_detected"] == 1
+    assert len(crossed_pose["persons"]) == 1
+    assert event["num_with_crossed_forearms"] == 1
+
+
+def test_evaluate_frames_does_not_detect_crossed_forearms_by_default() -> None:
+    frame = {
+        "timestamp": 100_000_000,
+        "resolution": {"width": 200, "height": 100},
+        "objects": [
+            {
+                "region_id": 11,
+                "detection": {
+                    "bounding_box": {
+                        "x_min": 0.10,
+                        "x_max": 0.40,
+                        "y_min": 0.20,
+                        "y_max": 0.80,
+                    }
+                },
+                "tensors": [
+                    {
+                        "name": "keypoints",
+                        "format": "keypoints",
+                        "dims": [17, 2],
+                        "point_names": POINT_NAMES,
+                        "data": _crossed_forearms_keypoint_data(),
+                    }
+                ],
+            }
+        ],
+    }
+
+    events = evaluate_frames([frame], startup_wall_time=1_700_000_000.0)
+
+    assert events == []
 
 
 def test_derive_relative_time_anchor_from_relative_ns_timestamp() -> None:
