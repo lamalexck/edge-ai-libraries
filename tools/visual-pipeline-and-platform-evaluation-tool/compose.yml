@@ -261,3 +261,33 @@ services:
     restart: on-failure:5
     volumes:
       - ./shared/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  raised-hand-detector:
+    image: docker.io/intel/raised-hand-detector:${DOCKER_TAG}
+    build:
+      context: ./scripts
+      dockerfile: Dockerfile
+      args:
+        http_proxy:
+        https_proxy:
+        no_proxy:
+    container_name: raised-hand-detector
+    restart: on-failure:5
+    depends_on:
+      mqtt-broker:
+        condition: service_started
+    environment:
+      MQTT_HOST: mqtt-broker
+      MQTT_PORT: "1883"
+      MQTT_TOPIC: ${MQTT_TOPIC:-pose}
+      DETECTION_RATE_LIMIT_SECONDS: ${DETECTION_RATE_LIMIT_SECONDS:-5}
+      http_proxy: ${http_proxy}
+      https_proxy: ${https_proxy}
+      no_proxy: "${no_proxy:+${no_proxy},}mqtt-broker"
+    volumes:
+      - ./shared/metadata:/metadata
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    command:
+      - python
+      - raised_hand_detector.py
