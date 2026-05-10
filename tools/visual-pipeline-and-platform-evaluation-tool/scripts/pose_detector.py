@@ -22,10 +22,10 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-SKELETON_LINE_THICKNESS = 20
+SKELETON_LINE_THICKNESS = 10
 KEYPOINT_RADIUS = 10
-KEYPOINT_COLOR = (241, 241, 241)
-PNG_BACKGROUND_COLOR = (210, 210, 210)
+KEYPOINT_COLOR = (200, 200, 200)
+PNG_BACKGROUND_COLOR = (125, 125, 125)
 
 
 SKELETON_CONNECTIONS: list[tuple[str, str, tuple[int, int, int]]] = [
@@ -42,13 +42,13 @@ SKELETON_CONNECTIONS: list[tuple[str, str, tuple[int, int, int]]] = [
     ("elbow_l", "shoulder_l", (0, 255, 0)),
     ("wrist_r", "elbow_r", (0, 255, 0)),
     ("elbow_r", "shoulder_r", (0, 255, 0)),
-    # Blue (BGR)
-    ("shoulder_l", "shoulder_r", (255, 0, 0)),
-    ("shoulder_l", "hip_l", (255, 0, 0)),
-    ("shoulder_r", "hip_r", (255, 0, 0)),
-    ("hip_l", "hip_r", (255, 0, 0)),
-    ("shoulder_r", "hip_l", (255, 0, 0)),
-    ("shoulder_l", "hip_r", (255, 0, 0)),
+    # Green (BGR)
+    ("shoulder_l", "shoulder_r", (0, 255, 0)),
+    ("shoulder_l", "hip_l", (0, 255, 0)),
+    ("shoulder_r", "hip_r", (0, 255, 0)),
+    ("hip_l", "hip_r", (0, 255, 0)),
+    ("shoulder_r", "hip_l", (0, 255, 0)),
+    ("shoulder_l", "hip_r", (0, 255, 0)),
 ]
 
 
