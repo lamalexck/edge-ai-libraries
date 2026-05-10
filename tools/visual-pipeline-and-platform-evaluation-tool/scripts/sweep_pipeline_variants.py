@@ -27,6 +27,17 @@ from plot_variant_throughput import build_platform_subtitle, collect_chart_data,
 
 TERMINAL_STATES = {"COMPLETED", "FAILED"}
 
+CSV_FIELDNAMES = [
+    "timestamp_utc",
+    "pipeline_id",
+    "variant_id",
+    "detection_model",
+    "total_streams",
+    "total_fps",
+    "per_stream_fps",
+    "elapsed_time_ms",
+]
+
 
 class ApiError(RuntimeError):
     """Raised when an API request fails."""
@@ -601,21 +612,26 @@ def utc_now_iso() -> str:
 
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = [
-        "timestamp_utc",
-        "pipeline_id",
-        "variant_id",
-        "detection_model",
-        "total_streams",
-        "total_fps",
-        "per_stream_fps",
-        "elapsed_time_ms",
-    ]
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDNAMES, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
+
+
+def initialize_csv(path: Path) -> None:
+    """Create or truncate a CSV file and write the header row."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDNAMES, extrasaction="ignore")
+        writer.writeheader()
+
+
+def append_csv_row(path: Path, row: dict[str, Any]) -> None:
+    """Append one benchmark row to an existing CSV file."""
+    with path.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDNAMES, extrasaction="ignore")
+        writer.writerow(row)
 
 
 def resolve_chart_output_path(output_csv: Path, output_chart: str) -> Path:
@@ -691,6 +707,9 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     current_job_id: str | None = None
     should_write_outputs = not (args.list or args.list_models)
+    output_path = Path(args.output_csv) if should_write_outputs else None
+    if output_path is not None:
+        initialize_csv(output_path)
 
     interrupted = False
 
@@ -936,6 +955,8 @@ def main() -> int:
                 row["error"] = str(exc)
             finally:
                 rows.append(row)
+                if output_path is not None:
+                    append_csv_row(output_path, row)
                 current_job_id = None
 
         return 0
@@ -948,9 +969,7 @@ def main() -> int:
                 print(f"Warning: failed to stop running job {current_job_id}: {exc}")
         return 130
     finally:
-        if should_write_outputs:
-            output_path = Path(args.output_csv)
-            write_csv(output_path, rows)
+        if should_write_outputs and output_path is not None:
             print(f"Wrote {len(rows)} rows to {output_path}")
             if not args.no_chart:
                 chart_path = resolve_chart_output_path(output_path, args.output_chart)
