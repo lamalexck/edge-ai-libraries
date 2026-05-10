@@ -95,7 +95,7 @@ variants:
         threshold=0.5
         device=NPU
         pre-process-backend=va
-        nireq=4 !
+        nireq=2 !
       queue !
       gvatrack tracking-type=zero-term-imageless !
       queue !
@@ -108,6 +108,8 @@ variants:
         pre-process-backend=va
         inference-region=roi-list
         object-class=face
+        nireq=2
+        inference-interval=3
         reclassify-interval=1 !
       queue !
       gvafpscounter starting-frame=100 !
