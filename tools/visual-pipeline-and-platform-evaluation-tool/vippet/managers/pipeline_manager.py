@@ -634,6 +634,11 @@ class PipelineManager:
                     )
                     if paths:
                         metadata_file_paths[pipeline_id] = paths
+                elif (
+                    execution_config.metadata_mode == InternalMetadataMode.MQTT
+                    and stream_index == 0
+                ):
+                    graph_instance.enforce_metadata_mqtt_method()
 
                 # Remove gvawatermark nodes when all sinks are fakesink (no real video output)
                 graph_instance = graph_instance.strip_watermark_if_all_sinks_are_fake()

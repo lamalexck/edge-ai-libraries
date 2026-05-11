@@ -40,7 +40,7 @@ variants:
       gvawatermark !
       gvametaconvert !
       queue !
-      gvametapublish file-format=json-lines file-path=/dev/null !
+      gvametapublish method=file file-format=json-lines file-path=/dev/null !
       fakesink name=default_output_sink sync=false async=false
   - name: GPU
     pipeline_description: >-
@@ -76,7 +76,7 @@ variants:
       gvawatermark !
       gvametaconvert !
       queue !
-      gvametapublish file-format=json-lines file-path=/dev/null !
+      gvametapublish method=file file-format=json-lines file-path=/dev/null !
       fakesink name=default_output_sink sync=false async=false
   - name: NPU
     pipeline_description: >-
@@ -110,7 +110,7 @@ variants:
       gvawatermark !
       gvametaconvert !
       queue !
-      gvametapublish file-format=json-lines file-path=/dev/null !
+      gvametapublish method=file file-format=json-lines file-path=/dev/null !
       fakesink name=default_output_sink sync=false async=false
   - name: GPU_NPU
     pipeline_description: >-
@@ -145,6 +145,6 @@ variants:
       gvawatermark !
       gvametaconvert !
       queue !
-      gvametapublish file-format=json-lines file-path=/dev/null !
+      gvametapublish method=file file-format=json-lines file-path=/dev/null !
       fakesink name=default_output_sink sync=false async=false
 
