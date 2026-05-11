@@ -44,6 +44,10 @@ FRAME_QUEUE_MAX_SIZE = 128
 EVENT_QUEUE_MAX_SIZE = 256
 SENTINEL: object = object()
 
+# Minimum backward jump in relative-offset seconds that is treated as a pipeline
+# restart rather than normal jitter. Well above any plausible inter-frame gap.
+TIMESTAMP_RESET_THRESHOLD_SECONDS: float = 5.0
+
 
 def _format_point(point: dict[str, Any] | None) -> str:
     """Format keypoint dict to concise x,y string for logs."""
@@ -164,6 +168,7 @@ def _evaluation_worker(
 ) -> None:
     """Frame evaluation thread that translates frames into events."""
     last_detection_time: float | None = None
+    last_known_relative_offset: float | None = None
     effective_startup_wall_time = startup_wall_time
     has_calibrated_relative_anchor = False
     try:
@@ -187,6 +192,25 @@ def _evaluation_worker(
                 frame_list = frame_batch
                 # Backward-compatible fallback for queue entries without receive-time metadata.
                 batch_received_wall_time = time.time()
+
+            current_relative_offset = _first_relative_offset(frame_list)
+            if (
+                current_relative_offset is not None
+                and last_known_relative_offset is not None
+                and last_known_relative_offset - current_relative_offset
+                > TIMESTAMP_RESET_THRESHOLD_SECONDS
+            ):
+                logger.warning(
+                    "Timestamp reset detected: offset jumped backward from %.3fs to %.3fs; "
+                    "recalibrating anchor and clearing rate limiter",
+                    last_known_relative_offset,
+                    current_relative_offset,
+                )
+                has_calibrated_relative_anchor = False
+                last_detection_time = None
+                last_known_relative_offset = None
+            if current_relative_offset is not None:
+                last_known_relative_offset = current_relative_offset
 
             if not has_calibrated_relative_anchor:
                 anchor_info = _derive_relative_time_anchor(
@@ -339,6 +363,18 @@ def _compute_detection_time(
         startup_wall_time,
     )
     return startup_wall_time + timestamp_seconds
+
+
+def _first_relative_offset(frames: list[dict[str, Any]]) -> float | None:
+    """Return the first relative (non-epoch) timestamp in seconds from a frame list."""
+    for frame in frames:
+        timestamp_seconds = _frame_timestamp_to_seconds(frame.get("timestamp"))
+        if timestamp_seconds is None:
+            continue
+        if 946684800 <= timestamp_seconds <= 4102444800:
+            continue
+        return timestamp_seconds
+    return None
 
 
 def _derive_relative_time_anchor(
