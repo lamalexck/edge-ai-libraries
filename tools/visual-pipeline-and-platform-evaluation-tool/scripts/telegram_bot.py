@@ -26,6 +26,24 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+_VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
+
+
+def _resolve_telegram_log_level() -> tuple[int, str | None]:
+    """Resolve logger level from TELEGRAM_BOT_LOG_LEVEL environment variable."""
+    raw_level = os.getenv("TELEGRAM_BOT_LOG_LEVEL", "INFO")
+    normalized_level = raw_level.strip().upper()
+    if normalized_level in _VALID_LOG_LEVELS:
+        return getattr(logging, normalized_level), None
+
+    return (
+        logging.INFO,
+        (
+            "Invalid TELEGRAM_BOT_LOG_LEVEL=%r, using default INFO"
+            % raw_level
+        ),
+    )
+
 
 class TelegramBot:
     """Telegram bot with aiohttp-based async transport and sync wrappers."""
@@ -52,6 +70,13 @@ class TelegramBot:
         env_path = self._resolve_env_file(env_file)
         if env_path is not None:
             load_dotenv(env_path)
+
+        resolved_level, invalid_level_warning = _resolve_telegram_log_level()
+        logger.setLevel(resolved_level)
+        if invalid_level_warning:
+            logger.warning(invalid_level_warning)
+
+        if env_path is not None:
             logger.info("Loaded environment from %s", env_path)
         else:
             logger.debug(".env file not found, checking environment variables")

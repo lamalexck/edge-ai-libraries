@@ -8,6 +8,7 @@ from pose_detector import render_raised_hands_pngs_from_event_json
 from raised_hand_detector import (
     _compute_detection_time,
     _derive_relative_time_anchor,
+    _first_relative_offset,
     evaluate_frames,
 )
 
@@ -178,7 +179,7 @@ def test_render_raised_hands_pngs_from_event_json_creates_one_full_frame_png(tmp
     assert image is not None
     assert image.shape[0] == 240
     assert image.shape[1] == 320
-    assert tuple(int(channel) for channel in image[0, 0]) == (64, 64, 64)
+    assert tuple(int(channel) for channel in image[0, 0]) == (125, 125, 125)
     assert image[70, 50].any()
     assert image[165, 160].any()
 
@@ -424,6 +425,25 @@ def test_evaluate_frames_logs_raised_hands_debug_coordinates(caplog) -> None:
     assert "wrist_r=(62.0,29.0)" in log_messages
     assert "eye_l=(47.0,36.8)" in log_messages
     assert "eye_r=(53.0,36.8)" in log_messages
+
+
+def test_first_relative_offset_returns_offset_for_relative_timestamp() -> None:
+    frames = [{"timestamp": 2_000_000_000}]  # 2 s relative offset
+    assert _first_relative_offset(frames) == 2.0
+
+
+def test_first_relative_offset_returns_none_for_epoch_timestamp() -> None:
+    frames = [{"timestamp": 1_700_000_000_000_000_000}]  # epoch-ns
+    assert _first_relative_offset(frames) is None
+
+
+def test_first_relative_offset_returns_none_for_empty_frames() -> None:
+    assert _first_relative_offset([]) is None
+
+
+def test_first_relative_offset_skips_frames_without_timestamp() -> None:
+    frames = [{"objects": []}, {"timestamp": 5_000_000_000}]  # second frame has 5 s offset
+    assert _first_relative_offset(frames) == 5.0
 
 
 def test_evaluate_frames_detects_crossed_forearms_pose() -> None:
