@@ -1,0 +1,7 @@
+<<<<<<< HEAD
+venv/
+__pycache__
+=======
+__pycache__/
+venv/
+>>>>>>> b0e0c5ff ([ViPPET] Added raised hand detector)
