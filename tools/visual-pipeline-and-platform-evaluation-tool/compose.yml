@@ -54,8 +54,8 @@ x-vippet: &vippet
     RTSPSRC_DEFAULT_LATENCY_MS: ${RTSPSRC_DEFAULT_LATENCY_MS:-100}
     METRICS_MANAGER_URL: ${METRICS_MANAGER_URL:-http://metrics-manager:9090}
 #    http_proxy: ${http_proxy}
-#    https_proxy: ${https_proxy}
-#    no_proxy: "${no_proxy:+${no_proxy},}mediamtx,metrics-service,mqtt-broker"
+    https_proxy: ${https_proxy}
+    no_proxy: "${no_proxy:+${no_proxy},}mediamtx,metrics-manager,mqtt-broker"
   device_cgroup_rules:
     # Broad access to USB devices is required to support a wide range of USB cameras.
     - 'c 189:* rmw'
