@@ -11,7 +11,7 @@ thumbnail: images/human-pose.png
 variants:
   - name: CPU
     pipeline_description: >-
-      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      filesrc location=/videos/input/auto/AlexGestures.mp4 !
       decodebin3 !
       gvadetect
       model=/models/output/public/yolo26n-pose/FP16/yolo26n-pose.xml
@@ -34,7 +34,7 @@ variants:
       fakesink name=default_output_sink sync=false async=false
   - name: GPU
     pipeline_description: >-
-      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      filesrc location=/videos/input/auto/AlexGestures.mp4 !
       decodebin3 ! 
       gvadetect
       model=/models/output/public/yolo26n-pose/FP16/yolo26n-pose.xml
@@ -57,7 +57,7 @@ variants:
       fakesink name=default_output_sink sync=false async=false
   - name: NPU
     pipeline_description: >-
-      filesrc location=/videos/input/auto/video-of-a-girl-raising-her-hands-7327403.mp4 !
+      filesrc location=/videos/input/auto/AlexGestures.mp4 !
       decodebin3 ! 
       gvadetect
       model=/models/output/public/yolo26n-pose/FP16/yolo26n-pose.xml
