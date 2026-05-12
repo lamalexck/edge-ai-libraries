@@ -1,9 +1,7 @@
-.venv
+.venv/
+.venv-*/
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-chunks/
-models/
 storage/
+models/
 .cache/
