@@ -41,7 +41,7 @@ from telegram_bot import TelegramBot
 logger = logging.getLogger(__name__)
 
 FRAME_QUEUE_MAX_SIZE = 128
-EVENT_QUEUE_MAX_SIZE = 256
+EVENT_QUEUE_MAX_SIZE = 32
 SENTINEL: object = object()
 
 # Minimum backward jump in relative-offset seconds that is treated as a pipeline
