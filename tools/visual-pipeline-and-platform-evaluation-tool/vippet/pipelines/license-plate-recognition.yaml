@@ -10,7 +10,7 @@ thumbnail: images/license-plate-recognition.png
 variants:
   - name: CPU
     pipeline_description: >-
-      filesrc location=/videos/input/license-plate-detection.mp4 !
+      filesrc location=/videos/input/traffic-flow-in-the-highway-2103099.mp4 !
       decodebin3 !
       gvafpscounter starting-frame=500 !
       gvadetect
@@ -42,7 +42,7 @@ variants:
       fakesink name=default_output_sink
   - name: GPU
     pipeline_description: >-
-      filesrc location=/videos/input/license-plate-detection.mp4 !
+      filesrc location=/videos/input/traffic-flow-in-the-highway-2103099.mp4 !
       decodebin3 !
       gvafpscounter starting-frame=500 !
       gvadetect
@@ -112,7 +112,7 @@ variants:
       fakesink name=default_output_sink
   - name: GPU_NPU
     pipeline_description: >-
-      filesrc location=/videos/input/license-plate-detection.mp4 !
+      filesrc location=/videos/input/traffic-flow-in-the-highway-2103099.mp4 !
       decodebin3 !
       gvafpscounter starting-frame=500 !
       gvadetect
