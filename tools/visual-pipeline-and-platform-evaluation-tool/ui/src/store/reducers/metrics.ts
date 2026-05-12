@@ -133,8 +133,17 @@ const filterMetrics = (
     (m) => m.name === name && (labelMatcher ? labelMatcher(m.labels) : true),
   );
 
-export const selectFpsMetric = (state: RootState) =>
-  findMetric(state.metrics.metrics, "fps")?.value;
+export const selectFpsMetric = (state: RootState) => {
+  const latestFps = state.metrics.metrics
+    .filter((m) => m.name === "fps")
+    .reduce<MetricData | undefined>((latest, m) => {
+      if (!latest || m.timestamp > latest.timestamp) {
+        return m;
+      }
+      return latest;
+    }, undefined);
+  return latestFps?.value;
+};
 
 export const selectCpuMetric = (state: RootState) =>
   findMetric(
