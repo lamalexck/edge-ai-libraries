@@ -490,18 +490,6 @@ export const DensityTests = () => {
           </div>
         )}
 
-        {!isRunning && frozenSummary && (
-          <div className="status-info m-4 p-3 bg-status-bg border border-status-border">
-            <p className="text-sm font-medium text-status-fg mb-2">
-              Frozen Metrics Snapshot
-            </p>
-            <MetricsDashboard
-              historyOverride={frozenHistory}
-              metricsOverride={frozenSummary}
-            />
-          </div>
-        )}
-
         {errorMessage && (
           <div className="status-error my-4 p-3 bg-status-bg border border-status-border">
             <p className="text-sm font-medium text-status-fg mb-2">
@@ -539,6 +527,18 @@ export const DensityTests = () => {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {!isRunning && frozenSummary && (
+          <div className="status-info m-4 p-3 bg-status-bg border border-status-border">
+            <p className="text-sm font-medium text-status-fg mb-2">
+              Frozen Metrics Snapshot
+            </p>
+            <MetricsDashboard
+              historyOverride={frozenHistory}
+              metricsOverride={frozenSummary}
+            />
           </div>
         )}
       </div>
