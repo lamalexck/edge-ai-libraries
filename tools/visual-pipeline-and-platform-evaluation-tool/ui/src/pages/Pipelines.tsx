@@ -33,7 +33,7 @@ import {
   handleAsyncJobError,
   isAsyncJobError,
 } from "@/lib/apiUtils";
-import type { OutputMode } from "@/api/api.generated";
+import type { MetadataMode, OutputMode } from "@/api/api.generated";
 import {
   Tooltip,
   TooltipContent,
@@ -127,6 +127,46 @@ const buildGraphData = (
     target: edge.target,
   })),
 });
+
+const deriveMetadataModeFromGraph = (
+  nodes: Array<{ id: string; type: string; data: { [key: string]: string } }>,
+): { metadataMode: MetadataMode | null; errorMessage: string | null } => {
+  const publishNodes = nodes.filter((node) => node.type === "gvametapublish");
+
+  if (publishNodes.length === 0) {
+    return { metadataMode: "disabled", errorMessage: null };
+  }
+
+  const methods = new Set<MetadataMode>();
+
+  for (const node of publishNodes) {
+    const method = String(node.data?.method ?? "").trim().toLowerCase();
+
+    if (method !== "file" && method !== "mqtt") {
+      return {
+        metadataMode: null,
+        errorMessage:
+          "Invalid gvametapublish method. Supported methods for run metadata are 'file' and 'mqtt'.",
+      };
+    }
+
+    methods.add(method as MetadataMode);
+  }
+
+  if (methods.size > 1) {
+    return {
+      metadataMode: null,
+      errorMessage:
+        "Mixed gvametapublish methods are not supported. Use the same method on all gvametapublish nodes.",
+    };
+  }
+
+  const metadataMode = methods.values().next().value;
+  return {
+    metadataMode: metadataMode ?? "disabled",
+    errorMessage: null,
+  };
+};
 
 export const Pipelines = () => {
   const DEFAULT_LOOPING_RUNTIME_SECONDS = 60;
@@ -332,6 +372,17 @@ export const Pipelines = () => {
       const hasMetadata = payloadGraphData.nodes.some(
         (n) => n.type === "gvametapublish",
       );
+
+      const { metadataMode, errorMessage } = deriveMetadataModeFromGraph(
+        payloadGraphData.nodes,
+      );
+
+      if (errorMessage || metadataMode === null) {
+        toast.error("Invalid metadata configuration", {
+          description: errorMessage ?? "Could not resolve metadata mode",
+        });
+        return;
+      }
 
       toast.success("Pipeline run started", {
         description: new Date().toISOString(),

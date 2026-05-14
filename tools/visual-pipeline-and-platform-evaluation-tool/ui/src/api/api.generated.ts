@@ -962,13 +962,13 @@ export type PipelinePerformanceSpec = {
   streams?: number;
 };
 export type OutputMode = "disabled" | "file" | "live_stream";
-export type MetadataMode = "disabled" | "file";
+export type MetadataMode = "disabled" | "file" | "mqtt";
 export type ExecutionConfig = {
   /** Mode for pipeline output generation. */
   output_mode?: OutputMode;
   /** Maximum runtime in seconds (0 = run until EOS, >0 = time limit with looping for live_stream/disabled). */
   max_runtime?: number;
-  /** Metadata publishing mode. 'disabled' (default): no metadata produced. 'file': gvametapublish elements write JSON-Lines metadata, available via SSE endpoints. */
+  /** Metadata publishing mode. 'disabled' (default): no metadata produced. 'file': gvametapublish elements write JSON-Lines metadata for SSE endpoints. 'mqtt': gvametapublish elements publish metadata with method=mqtt while preserving address/topic settings from the pipeline. */
   metadata_mode?: MetadataMode;
   /** When true, activates the DLStreamer `latency_tracer` in pipeline-only mode with a 1000 ms interval by setting `GST_DEBUG=GST_TRACER:7` (appended if already set) and `GST_TRACERS=latency_tracer(flags=pipeline,interval=1000)` on the GStreamer subprocess environment. When false (default), neither environment variable is modified. */
   enable_latency_metrics?: boolean;
