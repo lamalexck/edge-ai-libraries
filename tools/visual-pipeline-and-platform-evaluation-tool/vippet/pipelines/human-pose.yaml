@@ -29,7 +29,7 @@ variants:
       gvafpscounter starting-frame=100 !
       gvawatermark !
       queue !
-      gvametaconvert add-tensor-data=true timestamp-utc=true json-indent=-1 !
+      gvametaconvert timestamp-utc=true json-indent=-1 !
       gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
       fakesink name=default_output_sink sync=false async=false
   - name: GPU
@@ -52,7 +52,7 @@ variants:
       gvafpscounter starting-frame=100 !
       gvawatermark !
       queue !
-      gvametaconvert add-tensor-data=true timestamp-utc=true json-indent=-1 !
+      gvametaconvert timestamp-utc=true json-indent=-1 !
       gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
       fakesink name=default_output_sink sync=false async=false
   - name: NPU
@@ -74,6 +74,6 @@ variants:
       gvafpscounter starting-frame=100 !
       gvawatermark !
       queue !
-      gvametaconvert add-tensor-data=true timestamp-utc=true json-indent=-1 !
+      gvametaconvert timestamp-utc=true json-indent=-1 !
       gvametapublish method=mqtt address=mqtt-broker:1883 topic=pose max-connect-attempts=2 !
       fakesink name=default_output_sink sync=false async=false
