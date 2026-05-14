@@ -1174,6 +1174,24 @@ class Graph:
                 metadata_file_paths.append(meta_path)
         return metadata_file_paths
 
+    def enforce_metadata_mqtt_method(self) -> int:
+        """
+        Set method=mqtt on all gvametapublish nodes while preserving broker settings.
+
+        This updates only the `method` field and intentionally keeps existing
+        `address`, `topic`, and `max-connect-attempts` values unchanged so the
+        pipeline-defined MQTT destination configuration is preserved.
+
+        Returns:
+            int: Number of gvametapublish nodes updated.
+        """
+        updated = 0
+        for node in self.nodes:
+            if node.type == "gvametapublish":
+                node.data["method"] = "mqtt"
+                updated += 1
+        return updated
+
     def unify_model_instance_ids(self) -> "Graph":
         """
         Unify model-instance-id for nodes with the same device and model.
