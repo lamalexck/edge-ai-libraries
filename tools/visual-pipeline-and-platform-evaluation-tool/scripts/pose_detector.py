@@ -22,6 +22,9 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
+SUPPORTED_KEYPOINT_TENSOR_FORMAT = "body-pose/coco-17"
+
+
 SKELETON_LINE_THICKNESS = 10
 KEYPOINT_RADIUS = 10
 KEYPOINT_COLOR = (200, 200, 200)
@@ -400,7 +403,10 @@ class RaisedHandDetector(PoseDetector):
         for obj in frame["objects"]:
             keypoints_tensor = None
             for tensor in obj.get("tensors", []):
-                if tensor.get("name") == "keypoints" and tensor.get("format") == "keypoints":
+                if (
+                    tensor.get("name") == "keypoints"
+                    and tensor.get("format") == SUPPORTED_KEYPOINT_TENSOR_FORMAT
+                ):
                     keypoints_tensor = tensor
                     break
 
@@ -497,7 +503,10 @@ class CrossedForearmDetector(PoseDetector):
         for obj in frame["objects"]:
             keypoints_tensor = None
             for tensor in obj.get("tensors", []):
-                if tensor.get("name") == "keypoints" and tensor.get("format") == "keypoints":
+                if (
+                    tensor.get("name") == "keypoints"
+                    and tensor.get("format") == SUPPORTED_KEYPOINT_TENSOR_FORMAT
+                ):
                     keypoints_tensor = tensor
                     break
 

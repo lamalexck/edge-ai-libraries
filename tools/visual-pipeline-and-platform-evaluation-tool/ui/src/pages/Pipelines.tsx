@@ -370,11 +370,6 @@ export const Pipelines = () => {
         }).unwrap();
       }
 
-      // Check the ADVANCED graph for gvametapublish (simple mode hides these nodes)
-      const hasMetadata = payloadGraphData.nodes.some(
-        (n) => n.type === "gvametapublish",
-      );
-
       const { metadataMode, errorMessage } = deriveMetadataModeFromGraph(
         payloadGraphData.nodes,
       );
@@ -404,8 +399,7 @@ export const Pipelines = () => {
           execution_config: {
             output_mode: outputMode,
             max_runtime: maxRuntimeSeconds,
-            metadata_mode:
-              hasMetadata && metadataEnabled ? "file" : "disabled",
+            metadata_mode: metadataMode,
             enable_latency_metrics: latencyMetricsEnabled,
           },
         },

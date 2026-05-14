@@ -4,7 +4,10 @@ import cv2
 import pytest
 import time
 
-from pose_detector import render_raised_hands_pngs_from_event_json
+from pose_detector import (
+    SUPPORTED_KEYPOINT_TENSOR_FORMAT,
+    render_raised_hands_pngs_from_event_json,
+)
 from raised_hand_detector import (
     _compute_detection_time,
     _derive_relative_time_anchor,
@@ -102,7 +105,7 @@ def test_evaluate_frames_uses_normalized_detection_bbox_and_preserves_resolution
                 "tensors": [
                     {
                         "name": "keypoints",
-                        "format": "keypoints",
+                        "format": SUPPORTED_KEYPOINT_TENSOR_FORMAT,
                         "dims": [17, 2],
                         "point_names": POINT_NAMES,
                         "data": _raised_hands_keypoint_data(),
@@ -298,7 +301,7 @@ def test_evaluate_frames_computes_detection_time_from_startup_and_frame_timestam
                 "tensors": [
                     {
                         "name": "keypoints",
-                        "format": "keypoints",
+                        "format": SUPPORTED_KEYPOINT_TENSOR_FORMAT,
                         "dims": [17, 2],
                         "point_names": POINT_NAMES,
                         "data": _raised_hands_keypoint_data(),
@@ -333,7 +336,7 @@ def test_evaluate_frames_uses_wall_clock_fallback_for_invalid_timestamp(monkeypa
                 "tensors": [
                     {
                         "name": "keypoints",
-                        "format": "keypoints",
+                        "format": SUPPORTED_KEYPOINT_TENSOR_FORMAT,
                         "dims": [17, 2],
                         "point_names": POINT_NAMES,
                         "data": _raised_hands_keypoint_data(),
@@ -370,7 +373,7 @@ def test_evaluate_frames_logs_mqtt_and_computed_timestamps(caplog) -> None:
                 "tensors": [
                     {
                         "name": "keypoints",
-                        "format": "keypoints",
+                        "format": SUPPORTED_KEYPOINT_TENSOR_FORMAT,
                         "dims": [17, 2],
                         "point_names": POINT_NAMES,
                         "data": _raised_hands_keypoint_data(),
@@ -406,7 +409,7 @@ def test_evaluate_frames_logs_raised_hands_debug_coordinates(caplog) -> None:
                 "tensors": [
                     {
                         "name": "keypoints",
-                        "format": "keypoints",
+                        "format": SUPPORTED_KEYPOINT_TENSOR_FORMAT,
                         "dims": [17, 2],
                         "point_names": POINT_NAMES,
                         "data": _raised_hands_keypoint_data(),
@@ -464,7 +467,7 @@ def test_evaluate_frames_detects_crossed_forearms_pose() -> None:
                 "tensors": [
                     {
                         "name": "keypoints",
-                        "format": "keypoints",
+                        "format": SUPPORTED_KEYPOINT_TENSOR_FORMAT,
                         "dims": [17, 2],
                         "point_names": POINT_NAMES,
                         "data": _crossed_forearms_keypoint_data(),
@@ -508,10 +511,43 @@ def test_evaluate_frames_does_not_detect_crossed_forearms_by_default() -> None:
                 "tensors": [
                     {
                         "name": "keypoints",
-                        "format": "keypoints",
+                        "format": SUPPORTED_KEYPOINT_TENSOR_FORMAT,
                         "dims": [17, 2],
                         "point_names": POINT_NAMES,
                         "data": _crossed_forearms_keypoint_data(),
+                    }
+                ],
+            }
+        ],
+    }
+
+    events = evaluate_frames([frame], startup_wall_time=1_700_000_000.0)
+
+    assert events == []
+
+
+def test_evaluate_frames_skips_legacy_keypoints_tensor_format() -> None:
+    frame = {
+        "timestamp": 100_000_000,
+        "resolution": {"width": 200, "height": 100},
+        "objects": [
+            {
+                "region_id": 12,
+                "detection": {
+                    "bounding_box": {
+                        "x_min": 0.10,
+                        "x_max": 0.40,
+                        "y_min": 0.20,
+                        "y_max": 0.80,
+                    }
+                },
+                "tensors": [
+                    {
+                        "name": "keypoints",
+                        "format": "keypoints",
+                        "dims": [17, 2],
+                        "point_names": POINT_NAMES,
+                        "data": _raised_hands_keypoint_data(),
                     }
                 ],
             }
