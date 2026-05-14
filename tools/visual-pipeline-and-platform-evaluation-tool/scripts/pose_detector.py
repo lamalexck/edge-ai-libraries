@@ -115,6 +115,142 @@ def compute_frame_keypoints(
     return result
 
 
+def _frame_keypoints_from_absolute(
+    keypoints: dict[str, tuple[float, float]],
+) -> dict[str, dict[str, float]]:
+    """Normalize absolute keypoints to the event keypoint payload shape."""
+    return {
+        name: {"x": round(float(x), 2), "y": round(float(y), 2)}
+        for name, (x, y) in keypoints.items()
+    }
+
+
+def _frame_keypoints_from_bbox_relative(
+    keypoints: dict[str, tuple[float, float]],
+    bbox_x: float,
+    bbox_y: float,
+    bbox_w: float,
+    bbox_h: float,
+) -> dict[str, dict[str, float]]:
+    """Project bbox-relative normalized keypoints into frame pixel coordinates."""
+    return {
+        name: {
+            "x": round(bbox_x + kp_x * bbox_w, 2),
+            "y": round(bbox_y + kp_y * bbox_h, 2),
+        }
+        for name, (kp_x, kp_y) in keypoints.items()
+    }
+
+
+def _extract_keypoints_from_new_schema(
+    obj: dict[str, Any],
+) -> dict[str, tuple[float, float]] | None:
+    """Extract absolute frame keypoints from objects[].keypoints[].points[]."""
+    keypoint_sets = obj.get("keypoints")
+    if not isinstance(keypoint_sets, list) or not keypoint_sets:
+        return None
+
+    # Prefer the canonical COCO-17 pose entry when multiple keypoint sets exist.
+    ordered_sets = sorted(
+        [entry for entry in keypoint_sets if isinstance(entry, dict)],
+        key=lambda entry: 0
+        if str(entry.get("semantic_tag", "")).strip().lower() == "body-pose/coco-17"
+        else 1,
+    )
+
+    for keypoint_set in ordered_sets:
+        points = keypoint_set.get("points")
+        if not isinstance(points, list):
+            continue
+
+        extracted: dict[str, tuple[float, float]] = {}
+        for point in points:
+            if not isinstance(point, dict):
+                continue
+
+            name = point.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+
+            try:
+                x = float(point["x"])
+                y = float(point["y"])
+            except (KeyError, TypeError, ValueError):
+                continue
+
+            extracted[name] = (x, y)
+
+        if extracted:
+            return extracted
+
+    return None
+
+
+def _extract_keypoints_from_legacy_tensor(
+    obj: dict[str, Any],
+) -> dict[str, tuple[float, float]] | None:
+    """Extract bbox-relative normalized keypoints from legacy tensor payload."""
+    keypoints_tensor = None
+    for tensor in obj.get("tensors", []):
+        if tensor.get("name") == "keypoints" and tensor.get("format") == "keypoints":
+            keypoints_tensor = tensor
+            break
+
+    if not keypoints_tensor:
+        return None
+
+    kp_data = keypoints_tensor.get("data", [])
+    point_names = keypoints_tensor.get("point_names", [])
+    dims = keypoints_tensor.get("dims", [])
+
+    if dims != [17, 2] or len(kp_data) != 34 or len(point_names) != 17:
+        logger.warning(
+            "Invalid keypoint tensor for region_id %s: dims=%s, data_len=%d",
+            obj.get("region_id"),
+            dims,
+            len(kp_data),
+        )
+        return None
+
+    extracted: dict[str, tuple[float, float]] = {}
+    for i, point_name in enumerate(point_names):
+        if not isinstance(point_name, str) or not point_name:
+            continue
+        try:
+            extracted[point_name] = (
+                float(kp_data[2 * i]),
+                float(kp_data[2 * i + 1]),
+            )
+        except (TypeError, ValueError, IndexError):
+            logger.warning(
+                "Malformed keypoint tensor data for region_id %s",
+                obj.get("region_id"),
+            )
+            return None
+
+    return extracted if extracted else None
+
+
+def extract_object_keypoints(
+    obj: dict[str, Any],
+) -> tuple[dict[str, tuple[float, float]], bool] | None:
+    """Extract object keypoints and whether they are bbox-relative normalized.
+
+    Returns:
+        Tuple of (keypoints_by_name, is_bbox_relative_normalized), or ``None``
+        when no usable keypoints are found.
+    """
+    absolute_keypoints = _extract_keypoints_from_new_schema(obj)
+    if absolute_keypoints:
+        return absolute_keypoints, False
+
+    legacy_keypoints = _extract_keypoints_from_legacy_tensor(obj)
+    if legacy_keypoints:
+        return legacy_keypoints, True
+
+    return None
+
+
 def extract_frame_resolution(frame: dict[str, Any]) -> tuple[int, int] | None:
     """Extract frame width and height from the MQTT frame payload."""
     resolution = frame.get("resolution")
@@ -397,40 +533,26 @@ class RaisedHandDetector(PoseDetector):
         if "objects" not in frame:
             raise KeyError("frame must contain 'objects' key")
 
+        frame_resolution = extract_frame_resolution(frame)
+        frame_width = frame_resolution[0] if frame_resolution else None
+        frame_height = frame_resolution[1] if frame_resolution else None
+
         for obj in frame["objects"]:
-            keypoints_tensor = None
-            for tensor in obj.get("tensors", []):
-                if tensor.get("name") == "keypoints" and tensor.get("format") == "keypoints":
-                    keypoints_tensor = tensor
-                    break
-
-            if not keypoints_tensor:
+            parsed_keypoints = extract_object_keypoints(obj)
+            if parsed_keypoints is None:
                 continue
 
-            kp_data = keypoints_tensor.get("data", [])
-            point_names = keypoints_tensor.get("point_names", [])
-            dims = keypoints_tensor.get("dims", [])
-
-            if dims != [17, 2] or len(kp_data) != 34 or len(point_names) != 17:
-                logger.warning(
-                    f"Invalid keypoint tensor for region_id {obj.get('region_id')}: "
-                    f"dims={dims}, data_len={len(kp_data)}"
-                )
-                continue
-
-            frame_resolution = extract_frame_resolution(frame)
-            frame_width = frame_resolution[0] if frame_resolution else None
-            frame_height = frame_resolution[1] if frame_resolution else None
+            object_keypoints, is_bbox_relative = parsed_keypoints
             bbox = extract_bbox_pixels(obj, frame_width, frame_height)
             if bbox is None:
                 logger.warning(f"Invalid bbox for region_id {obj.get('region_id')}")
                 continue
             bbox_x, bbox_y, bbox_w, bbox_h = bbox
 
-            eye_l = extract_keypoint_coords(point_names, kp_data, "eye_l")
-            eye_r = extract_keypoint_coords(point_names, kp_data, "eye_r")
-            wrist_l = extract_keypoint_coords(point_names, kp_data, "wrist_l")
-            wrist_r = extract_keypoint_coords(point_names, kp_data, "wrist_r")
+            eye_l = object_keypoints.get("eye_l")
+            eye_r = object_keypoints.get("eye_r")
+            wrist_l = object_keypoints.get("wrist_l")
+            wrist_r = object_keypoints.get("wrist_r")
 
             if not all([eye_l, eye_r, wrist_l, wrist_r]):
                 logger.warning(f"Missing required keypoints for region_id {obj.get('region_id')}")
@@ -440,12 +562,21 @@ class RaisedHandDetector(PoseDetector):
             hands_raised = (wrist_l[1] < eye_l[1]) and (wrist_r[1] < eye_r[1])  # type: ignore[index]
 
             if hands_raised:
+                if is_bbox_relative:
+                    frame_keypoints = _frame_keypoints_from_bbox_relative(
+                        object_keypoints,
+                        bbox_x,
+                        bbox_y,
+                        bbox_w,
+                        bbox_h,
+                    )
+                else:
+                    frame_keypoints = _frame_keypoints_from_absolute(object_keypoints)
+
                 persons.append({
                     "region_id": obj.get("region_id"),
                     "bbox": {"x": bbox_x, "y": bbox_y, "w": bbox_w, "h": bbox_h},
-                    "keypoints": compute_frame_keypoints(
-                        kp_data, point_names, bbox_x, bbox_y, bbox_w, bbox_h
-                    ),
+                    "keypoints": frame_keypoints,
                 })
 
         return persons
@@ -495,31 +626,21 @@ class CrossedForearmDetector(PoseDetector):
         frame_height = frame_resolution[1] if frame_resolution else None
 
         for obj in frame["objects"]:
-            keypoints_tensor = None
-            for tensor in obj.get("tensors", []):
-                if tensor.get("name") == "keypoints" and tensor.get("format") == "keypoints":
-                    keypoints_tensor = tensor
-                    break
-
-            if not keypoints_tensor:
+            parsed_keypoints = extract_object_keypoints(obj)
+            if parsed_keypoints is None:
                 continue
 
-            kp_data = keypoints_tensor.get("data", [])
-            point_names = keypoints_tensor.get("point_names", [])
-            dims = keypoints_tensor.get("dims", [])
-
-            if dims != [17, 2] or len(kp_data) != 34 or len(point_names) != 17:
-                continue
+            object_keypoints, is_bbox_relative = parsed_keypoints
 
             bbox = extract_bbox_pixels(obj, frame_width, frame_height)
             if bbox is None:
                 continue
             bbox_x, bbox_y, bbox_w, bbox_h = bbox
 
-            wrist_l = extract_keypoint_coords(point_names, kp_data, "wrist_l")
-            wrist_r = extract_keypoint_coords(point_names, kp_data, "wrist_r")
-            elbow_l = extract_keypoint_coords(point_names, kp_data, "elbow_l")
-            elbow_r = extract_keypoint_coords(point_names, kp_data, "elbow_r")
+            wrist_l = object_keypoints.get("wrist_l")
+            wrist_r = object_keypoints.get("wrist_r")
+            elbow_l = object_keypoints.get("elbow_l")
+            elbow_r = object_keypoints.get("elbow_r")
 
             if not all([wrist_l, wrist_r, elbow_l, elbow_r]):
                 continue
@@ -528,9 +649,19 @@ class CrossedForearmDetector(PoseDetector):
             forearm_l_len = math.hypot(wrist_l[0] - elbow_l[0], wrist_l[1] - elbow_l[1])
             forearm_r_len = math.hypot(wrist_r[0] - elbow_r[0], wrist_r[1] - elbow_r[1])
 
+            if is_bbox_relative:
+                forearm_l_len_norm = forearm_l_len
+                forearm_r_len_norm = forearm_r_len
+            else:
+                norm_scale = max(bbox_w, bbox_h)
+                if norm_scale <= 0:
+                    continue
+                forearm_l_len_norm = forearm_l_len / norm_scale
+                forearm_r_len_norm = forearm_r_len / norm_scale
+
             if (
-                forearm_l_len < self.MIN_FOREARM_LENGTH_NORM
-                or forearm_r_len < self.MIN_FOREARM_LENGTH_NORM
+                forearm_l_len_norm < self.MIN_FOREARM_LENGTH_NORM
+                or forearm_r_len_norm < self.MIN_FOREARM_LENGTH_NORM
             ):
                 continue
 
@@ -541,13 +672,16 @@ class CrossedForearmDetector(PoseDetector):
                 {
                     "region_id": obj.get("region_id"),
                     "bbox": {"x": bbox_x, "y": bbox_y, "w": bbox_w, "h": bbox_h},
-                    "keypoints": compute_frame_keypoints(
-                        kp_data,
-                        point_names,
-                        bbox_x,
-                        bbox_y,
-                        bbox_w,
-                        bbox_h,
+                    "keypoints": (
+                        _frame_keypoints_from_bbox_relative(
+                            object_keypoints,
+                            bbox_x,
+                            bbox_y,
+                            bbox_w,
+                            bbox_h,
+                        )
+                        if is_bbox_relative
+                        else _frame_keypoints_from_absolute(object_keypoints)
                     ),
                 }
             )
