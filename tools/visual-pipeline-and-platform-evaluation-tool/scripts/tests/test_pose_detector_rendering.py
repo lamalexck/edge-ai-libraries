@@ -83,6 +83,62 @@ def _crossed_forearms_keypoint_data() -> list[float]:
     ]
 
 
+def _build_new_format_pose_object(
+    keypoint_data: list[float],
+    *,
+    region_id: int,
+    frame_width: int = 200,
+    frame_height: int = 100,
+) -> dict:
+    """Build one object in the new MQTT keypoint format."""
+    x_min = 0.10
+    x_max = 0.40
+    y_min = 0.20
+    y_max = 0.80
+
+    bbox_x = x_min * frame_width
+    bbox_y = y_min * frame_height
+    bbox_w = (x_max - x_min) * frame_width
+    bbox_h = (y_max - y_min) * frame_height
+
+    points = []
+    for index, name in enumerate(POINT_NAMES):
+        kp_x = keypoint_data[2 * index]
+        kp_y = keypoint_data[2 * index + 1]
+        points.append(
+            {
+                "confidence": 0.99,
+                "index": index,
+                "name": name,
+                "x": round(bbox_x + kp_x * bbox_w, 2),
+                "y": round(bbox_y + kp_y * bbox_h, 2),
+            }
+        )
+
+    return {
+        "region_id": region_id,
+        "x": 999,
+        "y": 999,
+        "w": 1,
+        "h": 1,
+        "detection": {
+            "bounding_box": {
+                "x_min": x_min,
+                "x_max": x_max,
+                "y_min": y_min,
+                "y_max": y_max,
+            }
+        },
+        "keypoints": [
+            {
+                "semantic_tag": "body-pose/coco-17",
+                "skeleton": [],
+                "points": points,
+            }
+        ],
+    }
+
+
 def test_evaluate_frames_uses_normalized_detection_bbox_and_preserves_resolution() -> None:
     frame = {
         "timestamp": 123,
@@ -127,6 +183,33 @@ def test_evaluate_frames_uses_normalized_detection_bbox_and_preserves_resolution
     assert person["bbox"]["y"] == pytest.approx(20.0)
     assert person["bbox"]["w"] == pytest.approx(60.0)
     assert person["bbox"]["h"] == pytest.approx(60.0)
+
+
+def test_evaluate_frames_supports_new_keypoints_points_schema_for_raised_hands() -> None:
+    frame = {
+        "timestamp": 123,
+        "resolution": {"width": 200, "height": 100},
+        "objects": [
+            _build_new_format_pose_object(
+                _raised_hands_keypoint_data(),
+                region_id=7,
+            )
+        ],
+    }
+
+    events = evaluate_frames([frame])
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["num_with_hands_raised"] == 1
+
+    person = event["persons_with_raised_hands"][0]
+    assert person["bbox"]["x"] == pytest.approx(20.0)
+    assert person["bbox"]["y"] == pytest.approx(20.0)
+    assert person["bbox"]["w"] == pytest.approx(60.0)
+    assert person["bbox"]["h"] == pytest.approx(60.0)
+    assert person["keypoints"]["wrist_l"]["x"] == pytest.approx(38.0)
+    assert person["keypoints"]["wrist_l"]["y"] == pytest.approx(29.0)
 
 
 def test_render_raised_hands_pngs_from_event_json_creates_one_full_frame_png(tmp_path) -> None:
@@ -491,6 +574,64 @@ def test_evaluate_frames_detects_crossed_forearms_pose() -> None:
     assert crossed_pose["num_detected"] == 1
     assert len(crossed_pose["persons"]) == 1
     assert event["num_with_crossed_forearms"] == 1
+
+
+def test_evaluate_frames_supports_new_keypoints_points_schema_for_crossed_forearms() -> None:
+    frame = {
+        "timestamp": 100_000_000,
+        "resolution": {"width": 200, "height": 100},
+        "objects": [
+            _build_new_format_pose_object(
+                _crossed_forearms_keypoint_data(),
+                region_id=11,
+            )
+        ],
+    }
+
+    events = evaluate_frames(
+        [frame],
+        startup_wall_time=1_700_000_000.0,
+        enable_crossed_arm_detect=True,
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["num_with_crossed_forearms"] == 1
+    assert any(p["pose_type"] == "crossed_forearms" for p in event["poses"])
+
+
+def test_evaluate_frames_skips_malformed_new_keypoints_points_schema() -> None:
+    frame = {
+        "timestamp": 123,
+        "resolution": {"width": 200, "height": 100},
+        "objects": [
+            {
+                "region_id": 13,
+                "detection": {
+                    "bounding_box": {
+                        "x_min": 0.10,
+                        "x_max": 0.40,
+                        "y_min": 0.20,
+                        "y_max": 0.80,
+                    }
+                },
+                "keypoints": [
+                    {
+                        "semantic_tag": "body-pose/coco-17",
+                        "points": [
+                            {"name": "eye_l", "x": 40.0, "y": 20.0},
+                            {"name": "eye_r", "x": 60.0, "y": 20.0},
+                            {"name": "wrist_l", "x": "bad", "y": 10.0},
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    events = evaluate_frames([frame])
+
+    assert events == []
 
 
 def test_evaluate_frames_does_not_detect_crossed_forearms_by_default() -> None:
