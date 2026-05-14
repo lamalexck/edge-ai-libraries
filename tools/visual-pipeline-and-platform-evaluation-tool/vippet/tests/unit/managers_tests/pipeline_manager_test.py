@@ -1798,6 +1798,22 @@ class TestBuildPipelineCommandExecutionConfig(unittest.TestCase):
             str(ctx.exception),
         )
 
+    def test_metadata_mode_mqtt_without_gvametapublish_raises_error(self):
+        """metadata_mode=MQTT on a pipeline that has no gvametapublish must raise ValueError."""
+        execution_config = create_internal_execution_config(
+            metadata_mode=InternalMetadataMode.MQTT,
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            self.manager.build_pipeline_command(
+                self.specs, execution_config, self.job_id
+            )
+
+        self.assertIn(
+            "Metadata generation is enabled, but the pipeline does not contain any gvametapublish element.",
+            str(ctx.exception),
+        )
+
     def test_metadata_mode_file_multiple_pipelines_one_missing_gvametapublish_raises(
         self,
     ):
@@ -2040,6 +2056,58 @@ class TestBuildPipelineCommandExecutionConfig(unittest.TestCase):
         self.assertEqual(
             len(all_paths), len(set(all_paths)), "Metadata paths must be unique"
         )
+
+    def test_metadata_mode_mqtt_sets_method_and_preserves_publish_params(self):
+        """MQTT mode must enforce method=mqtt and keep address/topic/max-connect-attempts."""
+        pipeline_id = "/pipelines/with-publish/variants/cpu"
+        graph = Graph.from_dict(
+            {
+                "nodes": [
+                    {"id": "0", "type": "fakesrc", "data": {}},
+                    {
+                        "id": "1",
+                        "type": "gvametapublish",
+                        "data": {
+                            "method": "file",
+                            "address": "mqtt-broker:1883",
+                            "topic": "pose",
+                            "max-connect-attempts": "2",
+                        },
+                    },
+                    {
+                        "id": "2",
+                        "type": "fakesink",
+                        "data": {"name": "default_output_sink"},
+                    },
+                ],
+                "edges": [
+                    {"id": "0", "source": "0", "target": "1"},
+                    {"id": "1", "source": "1", "target": "2"},
+                ],
+            }
+        )
+        specs = [
+            InternalPipelinePerformanceSpec(
+                pipeline_id=pipeline_id,
+                pipeline_name="with-publish",
+                pipeline_graph=graph,
+                streams=1,
+            )
+        ]
+        execution_config = create_internal_execution_config(
+            metadata_mode=InternalMetadataMode.MQTT,
+        )
+
+        pipeline_cmd = self.manager.build_pipeline_command(
+            specs, execution_config, self.job_id
+        )
+
+        self.assertEqual(pipeline_cmd.metadata_file_paths, {})
+        self.assertIn("gvametapublish", pipeline_cmd.command)
+        self.assertIn("method=mqtt", pipeline_cmd.command)
+        self.assertIn("address=mqtt-broker:1883", pipeline_cmd.command)
+        self.assertIn("topic=pose", pipeline_cmd.command)
+        self.assertIn("max-connect-attempts=2", pipeline_cmd.command)
 
 
 class TestBuildPipelineCommandLooping(unittest.TestCase):

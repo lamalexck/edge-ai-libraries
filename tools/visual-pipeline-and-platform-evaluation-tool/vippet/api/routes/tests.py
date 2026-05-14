@@ -68,7 +68,7 @@ def run_performance_test(body: schemas.PerformanceTestSpec):
     - `execution_config`: Configuration for output mode, metadata mode and runtime limits
       - `output_mode`: disabled (default), file, or live_stream
       - `max_runtime`: maximum runtime in seconds (0 = run until EOS)
-      - `metadata_mode`: disabled (default) or file
+            - `metadata_mode`: disabled (default), file, or mqtt
 
     ## Response Codes
 
@@ -457,6 +457,7 @@ def _convert_metadata_mode(mode: schemas.MetadataMode) -> InternalMetadataMode:
     mode_mapping = {
         schemas.MetadataMode.DISABLED: InternalMetadataMode.DISABLED,
         schemas.MetadataMode.FILE: InternalMetadataMode.FILE,
+        schemas.MetadataMode.MQTT: InternalMetadataMode.MQTT,
     }
     return mode_mapping[mode]
 
