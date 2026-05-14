@@ -5801,6 +5801,45 @@ class TestInjectMetadataFilePaths(unittest.TestCase):
         self.assertEqual(graph.nodes[3].data, {})
 
 
+class TestEnforceMetadataMqttMethod(unittest.TestCase):
+    """Test cases for Graph.enforce_metadata_mqtt_method method."""
+
+    def test_sets_method_mqtt_and_preserves_connection_params(self):
+        graph = Graph(
+            nodes=[
+                Node(
+                    id="0",
+                    type="gvametapublish",
+                    data={
+                        "method": "file",
+                        "address": "mqtt-broker:1883",
+                        "topic": "pose",
+                        "max-connect-attempts": "2",
+                    },
+                ),
+            ],
+            edges=[],
+        )
+
+        updated = graph.enforce_metadata_mqtt_method()
+
+        self.assertEqual(updated, 1)
+        self.assertEqual(graph.nodes[0].data["method"], "mqtt")
+        self.assertEqual(graph.nodes[0].data["address"], "mqtt-broker:1883")
+        self.assertEqual(graph.nodes[0].data["topic"], "pose")
+        self.assertEqual(graph.nodes[0].data["max-connect-attempts"], "2")
+
+    def test_no_gvametapublish_returns_zero(self):
+        graph = Graph(
+            nodes=[Node(id="0", type="fakesrc", data={})],
+            edges=[],
+        )
+
+        updated = graph.enforce_metadata_mqtt_method()
+
+        self.assertEqual(updated, 0)
+
+
 class TestApplyStreamIdentifiers(unittest.TestCase):
     """Test cases for Graph.apply_stream_identifiers method."""
 

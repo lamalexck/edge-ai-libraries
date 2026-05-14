@@ -73,9 +73,9 @@ x-vippet: &vippet
     # venv so the legacy 2024.x ``openvino`` package never collides
     # with the OpenVINO 2026.x runtime used for inference.
     OMZ_VIRTUAL_ENV: ${OMZ_VIRTUAL_ENV:-/home/dlstreamer/.omz-venv}
-    http_proxy: ${http_proxy}
+#    http_proxy: ${http_proxy}
     https_proxy: ${https_proxy}
-    no_proxy: "${no_proxy:+${no_proxy},}mediamtx,metrics-manager,model-download"
+    no_proxy: "${no_proxy:+${no_proxy},}mediamtx,metrics-manager,model-download,mqtt-broker"
   device_cgroup_rules:
     # Broad access to USB devices is required to support a wide range of USB cameras.
     - 'c 189:* rmw'
@@ -88,6 +88,8 @@ x-vippet: &vippet
     - ./shared/scripts/:/scripts
     - ./shared/onvif/:/onvif
     - ./shared/metadata/:/metadata
+    - /etc/localtime:/etc/localtime:ro
+    - /etc/timezone:/etc/timezone:ro
 
 services:
   vippet-ui:
@@ -211,6 +213,7 @@ services:
       - "8554:8554"     # RTSP
       - "8889:8889"     # WebRTC signaling/HTTP
       - "8189:8189/udp" # WebRTC/ICE UDP
+    restart: on-failure:5
   onvif-discovery:
     image: docker.io/intel/vippet-onvif-discovery:${DOCKER_TAG}
     build:
@@ -258,3 +261,47 @@ services:
       http_proxy: ${http_proxy}
       https_proxy: ${https_proxy}
       no_proxy: ${no_proxy}
+
+  mqtt-broker:
+    image: eclipse-mosquitto:2.0
+    hostname: mqtt-broker
+    container_name: mqtt-broker
+    environment:
+      http_proxy: ${http_proxy}
+      https_proxy: ${https_proxy}
+      no_proxy: "${no_proxy:+${no_proxy},}vippet"
+    ports:
+      - "1883:1883"
+    restart: on-failure:5
+    volumes:
+      - ./shared/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  raised-hand-detector:
+    image: docker.io/intel/raised-hand-detector:${DOCKER_TAG}
+    build:
+      context: ./scripts
+      dockerfile: Dockerfile
+      args:
+        http_proxy:
+        https_proxy:
+        no_proxy:
+    container_name: raised-hand-detector
+    restart: on-failure:5
+    depends_on:
+      mqtt-broker:
+        condition: service_started
+    environment:
+      MQTT_HOST: mqtt-broker
+      MQTT_PORT: "1883"
+      MQTT_TOPIC: ${MQTT_TOPIC:-pose}
+      DETECTION_RATE_LIMIT_SECONDS: ${DETECTION_RATE_LIMIT_SECONDS:-5}
+      http_proxy: ${http_proxy}
+      https_proxy: ${https_proxy}
+      no_proxy: "${no_proxy:+${no_proxy},}mqtt-broker"
+    volumes:
+      - ./shared/metadata:/metadata
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    command:
+      - python
+      - raised_hand_detector.py
