@@ -6,6 +6,10 @@ This script loads a YAML config specifying multiple runs, where each run mixes
 variants of the same pipeline. For each run, it launches a single performance test
 containing all specified variants, polls job status until completion/failure,
 and writes CSV rows with aggregated metrics.
+
+Each configured variant can optionally set `enabled: false` to skip benchmarking
+without removing it from the config file. Runs where all variants are disabled
+are skipped and do not stop batch execution.
 """
 
 from __future__ import annotations
@@ -56,6 +60,7 @@ class VariantSpec:
     variant_id: str
     streams: int
     detection_model: str = ""
+    enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -255,6 +260,7 @@ def validate_and_parse_runs(config: dict[str, Any]) -> list[PipelineRun]:
             variant_id = str(variant_raw.get("variant_id", "")).strip()
             streams = variant_raw.get("streams")
             detection_model = str(variant_raw.get("detection_model", "")).strip()
+            enabled = variant_raw.get("enabled", True)
 
             if not variant_id:
                 raise ValueError(
@@ -265,12 +271,18 @@ def validate_and_parse_runs(config: dict[str, Any]) -> list[PipelineRun]:
                     f"runs[{index}].variants[{var_index}] 'streams' must be a positive integer, "
                     f"got {streams}"
                 )
+            if type(enabled) is not bool:
+                raise ValueError(
+                    f"runs[{index}].variants[{var_index}] 'enabled' must be a boolean, "
+                    f"got {enabled!r}"
+                )
 
             variants.append(
                 VariantSpec(
                     variant_id=variant_id,
                     streams=streams,
                     detection_model=detection_model,
+                    enabled=enabled,
                 )
             )
 
@@ -287,6 +299,11 @@ def extract_pipeline_graph(variant: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(graph, dict):
         raise RuntimeError("Variant is missing pipeline_graph")
     return json.loads(json.dumps(graph))
+
+
+def get_enabled_variants(run: PipelineRun) -> list[VariantSpec]:
+    """Return variants that should be benchmarked for a run."""
+    return [variant for variant in run.variants if variant.enabled]
 
 
 def discover_detection_models(
@@ -447,7 +464,7 @@ def discover_variant_targets(
         )
 
     # Validate all variants in the run exist
-    for variant_spec in run.variants:
+    for variant_spec in get_enabled_variants(run):
         variant_key = variant_spec.variant_id.lower()
         if variant_key not in by_variant_id:
             available = sorted(by_variant_id.keys())
@@ -468,7 +485,7 @@ def build_mixed_performance_request(
     """Build a single performance request with multiple variants of the same pipeline."""
     pipeline_performance_specs: list[dict[str, Any]] = []
 
-    for variant_spec in run.variants:
+    for variant_spec in get_enabled_variants(run):
         target = variant_targets[variant_spec.variant_id.lower()]
         detection_model = resolved_models.get(variant_spec.variant_id, "")
 
@@ -558,26 +575,35 @@ def list_config_runs(runs: list[PipelineRun]) -> None:
     """Print the runs from config."""
     print("Pipeline runs from config")
     for run_index, run in enumerate(runs, start=1):
-        total_streams = sum(v.streams for v in run.variants)
-        print(f"  [{run_index}] {run.pipeline_id}: {len(run.variants)} variant(s), {total_streams} total streams")
-        for var in run.variants:
+        enabled_variants = get_enabled_variants(run)
+        disabled_count = len(run.variants) - len(enabled_variants)
+        total_streams = sum(v.streams for v in enabled_variants)
+        print(
+            f"  [{run_index}] {run.pipeline_id}: {len(enabled_variants)} enabled variant(s), "
+            f"{total_streams} total streams"
+            f"{f', {disabled_count} disabled' if disabled_count else ''}"
+        )
+        for var in enabled_variants:
             model_label = f" (model: {var.detection_model})" if var.detection_model else ""
             print(f"      - {var.variant_id}: {var.streams} streams{model_label}")
 
 
 def format_variants_spec(run: PipelineRun) -> str:
     """Format variants spec as a summary string."""
-    parts = [f"{v.variant_id}:{v.streams}" for v in run.variants]
+    parts = [f"{v.variant_id}:{v.streams}" for v in get_enabled_variants(run)]
     return ";".join(parts)
 
 
 def validate_runs_against_backend(
     client: VippetApiClient,
     runs: list[PipelineRun],
-) -> list[dict[str, VariantTarget]]:
+) -> list[dict[str, VariantTarget] | None]:
     """Verify all configured pipelines and variants before launching any job."""
-    validated_targets: list[dict[str, VariantTarget]] = []
+    validated_targets: list[dict[str, VariantTarget] | None] = []
     for run in runs:
+        if not get_enabled_variants(run):
+            validated_targets.append(None)
+            continue
         validated_targets.append(discover_variant_targets(client, run))
     return validated_targets
 
@@ -615,7 +641,12 @@ def main() -> int:
 
         print("Validating configured pipelines and variants ...")
         validated_variant_targets = validate_runs_against_backend(client, runs)
-        print(f"Validated {len(validated_variant_targets)} pipeline run(s) against backend")
+        executable_runs = sum(1 for targets in validated_variant_targets if targets is not None)
+        skipped_runs = len(validated_variant_targets) - executable_runs
+        print(
+            f"Validated {executable_runs} executable pipeline run(s) against backend"
+            f"{f'; {skipped_runs} skipped (no enabled variants)' if skipped_runs else ''}"
+        )
 
         if args.dry_run:
             print("Dry-run: config, pipelines, and variants verified. Backend is ready.")
@@ -643,11 +674,25 @@ def main() -> int:
                 raise KeyboardInterrupt
 
             try:
-                print(f"\n[{run_index}/{len(runs)}] Running {run.pipeline_id} with {len(run.variants)} variant(s)")
+                enabled_variants = get_enabled_variants(run)
+                if not enabled_variants:
+                    print(
+                        f"\n[{run_index}/{len(runs)}] Skipping {run.pipeline_id}: "
+                        "no enabled variants"
+                    )
+                    continue
+                if variant_targets is None:
+                    raise RuntimeError(
+                        f"Internal error: validation targets missing for run '{run.pipeline_id}'"
+                    )
+                print(
+                    f"\n[{run_index}/{len(runs)}] Running {run.pipeline_id} "
+                    f"with {len(enabled_variants)} enabled variant(s)"
+                )
 
                 # Resolve detection models if specified
                 resolved_models: dict[str, str] = {}
-                for variant_spec in run.variants:
+                for variant_spec in enabled_variants:
                     if variant_spec.detection_model:
                         by_internal_name, by_display_name = discover_detection_models(client)
                         try:
@@ -664,8 +709,8 @@ def main() -> int:
                             return 2
 
                 # Print run summary
-                total_streams = sum(v.streams for v in run.variants)
-                for variant_spec in run.variants:
+                total_streams = sum(v.streams for v in enabled_variants)
+                for variant_spec in enabled_variants:
                     model_label = (
                         f" (model: {resolved_models.get(variant_spec.variant_id, 'default')})"
                         if variant_spec.detection_model
@@ -712,7 +757,7 @@ def main() -> int:
                 row: dict[str, Any] = {
                     "timestamp_utc": utc_now_iso(),
                     "pipeline_id": run.pipeline_id,
-                    "total_variants": len(run.variants),
+                    "total_variants": len(enabled_variants),
                     "total_streams": total_streams,
                     "variants_spec": format_variants_spec(run),
                     "total_fps": aggregate_total_fps,

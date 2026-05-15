@@ -6,6 +6,11 @@
 runs:
   - pipeline_id: age-gender-recognition
     variants:
+      - variant_id: cpu
+        streams: 10
+        enabled: true
+  - pipeline_id: age-gender-recognition
+    variants:
       - variant_id: gpu
         streams: 10
   - pipeline_id: age-gender-recognition
@@ -19,6 +24,11 @@ runs:
       - variant_id: npu
         streams: 5
 
+  - pipeline_id: defect-detection
+    variants:
+      - variant_id: cpu
+        streams: 10
+        enabled: true
   - pipeline_id: defect-detection
     variants:
       - variant_id: gpu
@@ -36,6 +46,11 @@ runs:
 
   - pipeline_id: goods-detection-classification
     variants:
+      - variant_id: cpu
+        streams: 10
+        enabled: true
+  - pipeline_id: goods-detection-classification
+    variants:
       - variant_id: gpu
         streams: 10
   - pipeline_id: goods-detection-classification
@@ -55,6 +70,11 @@ runs:
 
   - pipeline_id: goods-detection
     variants:
+      - variant_id: cpu
+        streams: 10
+        enabled: true
+  - pipeline_id: goods-detection
+    variants:
       - variant_id: gpu
         streams: 10
   - pipeline_id: goods-detection
@@ -70,6 +90,11 @@ runs:
 
   - pipeline_id: human-pose-detection
     variants:
+      - variant_id: cpu
+        streams: 10
+        enabled: true
+  - pipeline_id: human-pose-detection
+    variants:
       - variant_id: gpu
         streams: 10
   - pipeline_id: human-pose-detection
@@ -83,6 +108,11 @@ runs:
       - variant_id: npu
         streams: 4
 
+  - pipeline_id: license-plate-recognition
+    variants:
+      - variant_id: cpu
+        streams: 10
+        enabled: true
   - pipeline_id: license-plate-recognition
     variants:
       - variant_id: gpu
@@ -100,6 +130,11 @@ runs:
 
   - pipeline_id: motion-detection
     variants:
+      - variant_id: cpu
+        streams: 10
+        enabled: true
+  - pipeline_id: motion-detection
+    variants:
       - variant_id: gpu
         streams: 10
   - pipeline_id: motion-detection
@@ -113,6 +148,11 @@ runs:
       - variant_id: npu
         streams: 4
 
+  - pipeline_id: smart-nvr
+    variants:
+      - variant_id: cpu
+        streams: 10
+        enabled: true
   - pipeline_id: smart-nvr
     variants:
       - variant_id: gpu
@@ -136,6 +176,11 @@ runs:
       - variant_id: npu
         streams: 5
 
+  - pipeline_id: smart-parking
+    variants:
+      - variant_id: cpu
+        streams: 10
+        enabled: true
   - pipeline_id: smart-parking
     variants:
       - variant_id: gpu
