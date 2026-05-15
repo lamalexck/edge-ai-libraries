@@ -182,7 +182,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-csv",
-        default="pipeline_mix_throughput.csv",
+        default="batched_performance_report.csv",
         help="CSV output file path (default: %(default)s)",
     )
     parser.add_argument(
