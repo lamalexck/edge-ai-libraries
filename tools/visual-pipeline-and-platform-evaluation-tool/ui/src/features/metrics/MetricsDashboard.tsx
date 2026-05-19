@@ -318,7 +318,7 @@ export const MetricsDashboard = ({
         isSummary ? summaryContainerClassName : ""
       }`}
     >
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <MetricCard
           title={isSummary ? "Frame Rate Average" : "Frame Rate"}
           value={metrics.fps}
@@ -399,7 +399,7 @@ export const MetricsDashboard = ({
       </div>
 
       <div
-        className="grid grid-cols-1 gap-4 sm:grid-cols-3"
+        className="grid grid-cols-1 gap-4 sm:grid-cols-4"
       >
         <FrameRateChart
           data={fpsData}
