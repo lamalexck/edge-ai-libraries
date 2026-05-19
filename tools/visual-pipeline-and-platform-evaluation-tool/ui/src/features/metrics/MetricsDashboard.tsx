@@ -408,73 +408,22 @@ export const MetricsDashboard = ({
           forceDark={forceDark}
           useDemoStyles={useDemoStyles}
         />
+        {showLatencySection && (
+          <LatencyChart
+            data={latencyData}
+            yAxisMax={latencyYAxisMax}
+            isSummary={isSummary}
+            forceDark={forceDark}
+            useDemoStyles={useDemoStyles}
+          />
+        )}
         <CpuUsageChart
           data={cpuData}
           isSummary={isSummary}
           forceDark={forceDark}
           useDemoStyles={useDemoStyles}
         />
-        <MemoryUtilizationChart
-          data={memoryData}
-          isSummary={isSummary}
-          forceDark={forceDark}
-          useDemoStyles={useDemoStyles}
-        />
-        <CpuTemperatureChart
-          data={cpuTempData}
-          yAxisMax={cpuTempYAxisMax}
-          isSummary={isSummary}
-          forceDark={forceDark}
-          useDemoStyles={useDemoStyles}
-        />
-        <CpuFrequencyChart
-          data={cpuFrequencyData}
-          yAxisMax={cpuFrequencyYAxisMax}
-          isSummary={isSummary}
-          forceDark={forceDark}
-          useDemoStyles={useDemoStyles}
-        />
         {!useDemoStyles && (
-          <GpuUsageChart
-            data={gpuChartData}
-            dataKeys={availableEngines}
-            colors={availableEngines.map((engine) => engineColors[engine])}
-            labels={availableEngines.map((engine) => engineLabels[engine])}
-            selectedGpu={selectedGpu}
-            availableGpus={availableGpus}
-            onGpuChange={setSelectedGpu}
-            isSummary={isSummary}
-            forceDark={forceDark}
-            useDemoStyles={useDemoStyles}
-            summarySectionClassName={summarySectionClassName}
-            summaryTitleClassName={summaryTitleClassName}
-          />
-        )}
-        <GpuPowerChart
-          data={gpuPowerData}
-          yAxisMax={gpuPowerYAxisMax}
-          selectedGpu={selectedGpu}
-          availableGpus={availableGpus}
-          onGpuChange={setSelectedGpu}
-          isSummary={isSummary}
-          forceDark={forceDark}
-          useDemoStyles={useDemoStyles}
-          summarySectionClassName={summarySectionClassName}
-          summaryTitleClassName={summaryTitleClassName}
-        />
-        <GpuFrequencyChart
-          data={gpuFrequencyData}
-          yAxisMax={gpuFrequencyYAxisMax}
-          selectedGpu={selectedGpu}
-          availableGpus={availableGpus}
-          onGpuChange={setSelectedGpu}
-          isSummary={isSummary}
-          forceDark={forceDark}
-          useDemoStyles={useDemoStyles}
-          summarySectionClassName={summarySectionClassName}
-          summaryTitleClassName={summaryTitleClassName}
-        />
-        {useDemoStyles && (
           <GpuUsageChart
             data={gpuChartData}
             dataKeys={availableEngines}
@@ -498,6 +447,18 @@ export const MetricsDashboard = ({
             useDemoStyles={useDemoStyles}
           />
         )}
+        <GpuPowerChart
+          data={gpuPowerData}
+          yAxisMax={gpuPowerYAxisMax}
+          selectedGpu={selectedGpu}
+          availableGpus={availableGpus}
+          onGpuChange={setSelectedGpu}
+          isSummary={isSummary}
+          forceDark={forceDark}
+          useDemoStyles={useDemoStyles}
+          summarySectionClassName={summarySectionClassName}
+          summaryTitleClassName={summaryTitleClassName}
+        />
         {hasNpuData && (
           <NpuPowerChart
             data={npuPowerData}
@@ -507,6 +468,31 @@ export const MetricsDashboard = ({
             useDemoStyles={useDemoStyles}
           />
         )}
+        <MemoryUtilizationChart
+          data={memoryData}
+          isSummary={isSummary}
+          forceDark={forceDark}
+          useDemoStyles={useDemoStyles}
+        />
+        <CpuFrequencyChart
+          data={cpuFrequencyData}
+          yAxisMax={cpuFrequencyYAxisMax}
+          isSummary={isSummary}
+          forceDark={forceDark}
+          useDemoStyles={useDemoStyles}
+        />
+        <GpuFrequencyChart
+          data={gpuFrequencyData}
+          yAxisMax={gpuFrequencyYAxisMax}
+          selectedGpu={selectedGpu}
+          availableGpus={availableGpus}
+          onGpuChange={setSelectedGpu}
+          isSummary={isSummary}
+          forceDark={forceDark}
+          useDemoStyles={useDemoStyles}
+          summarySectionClassName={summarySectionClassName}
+          summaryTitleClassName={summaryTitleClassName}
+        />
         {hasNpuData && (
           <NpuFrequencyChart
             data={npuFrequencyData}
@@ -516,13 +502,27 @@ export const MetricsDashboard = ({
             useDemoStyles={useDemoStyles}
           />
         )}
-        {showLatencySection && (
-          <LatencyChart
-            data={latencyData}
-            yAxisMax={latencyYAxisMax}
+        <CpuTemperatureChart
+          data={cpuTempData}
+          yAxisMax={cpuTempYAxisMax}
+          isSummary={isSummary}
+          forceDark={forceDark}
+          useDemoStyles={useDemoStyles}
+        />
+        {useDemoStyles && (
+          <GpuUsageChart
+            data={gpuChartData}
+            dataKeys={availableEngines}
+            colors={availableEngines.map((engine) => engineColors[engine])}
+            labels={availableEngines.map((engine) => engineLabels[engine])}
+            selectedGpu={selectedGpu}
+            availableGpus={availableGpus}
+            onGpuChange={setSelectedGpu}
             isSummary={isSummary}
             forceDark={forceDark}
             useDemoStyles={useDemoStyles}
+            summarySectionClassName={summarySectionClassName}
+            summaryTitleClassName={summaryTitleClassName}
           />
         )}
       </div>
