@@ -257,6 +257,9 @@
   extra_model_procs: []
   unsupported_devices: ""
   default: true
+  download_request:
+    hub: ultralytics
+    name: yolo26s-pose
 
 - name: yolo26n-pose
   display_name: YOLO 26n Pose
@@ -272,6 +275,9 @@
   extra_model_procs: []
   unsupported_devices: ""
   default: true
+  download_request:
+    hub: ultralytics
+    name: yolo26n-pose
 
 - name: yolo11s-pose
   display_name: YOLO 11s Pose
@@ -287,6 +293,10 @@
   extra_model_procs: []
   unsupported_devices: ""
   default: true
+  download_request:
+    hub: ultralytics
+    name: yolo11s-pose
+
 
 - name: yolo11n-pose
   display_name: YOLO 11n Pose
@@ -302,3 +312,6 @@
   extra_model_procs: []
   unsupported_devices: ""
   default: true
+  download_request:
+    hub: ultralytics
+    name: yolo11n-pose
