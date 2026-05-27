@@ -375,7 +375,9 @@ class Graph:
         # Split the pipeline into segments by '!' which separates elements/caps
         raw_elements = pipeline_description.split("!")
 
-        # node_id is derived from the position of segments/elements
+        # node_id is assigned per created node (TYPE or caps), not per segment.
+        # This supports segments that legally contain multiple TYPE tokens
+        # (for example: "qtdemux name=demux demux.audio_0").
         node_id = 0
         # edge_id is a monotonically increasing counter across the whole graph
         # and is always serialized as a string.
@@ -420,6 +422,7 @@ class Graph:
                             tee_stack=tee_stack,
                             edge_id=edge_id,
                         )
+                        node_id += 1
                     case "PROPERTY":
                         _add_property_to_last_node(nodes, token)
                     case "TEE_END":
@@ -436,8 +439,6 @@ class Graph:
                     # SKIP is filtered in _tokenize and never reaches here.
 
                 prev_token_kind = token.kind
-
-            node_id += 1
 
         # Post-process models, video paths labels and module paths so stored
         # graphs reference display names / filenames instead of absolute paths.
@@ -824,18 +825,42 @@ class Graph:
         """
         Unify all element names in the graph to ensure uniqueness across multiple pipelines.
 
+        Besides rewriting explicit ``name=...`` properties, this also rewrites
+        named pad-reference node types of the form ``<name>.<pad>`` so they
+        stay aligned with renamed elements (for example
+        ``demux.audio_0 -> demux_0_0.audio_0``).
+
         Args:
             pipeline_index: Index of the pipeline (used in new element name)
             stream_index: Index of the stream (used in new element name)
         """
         modified_graph = copy.deepcopy(self)
+        rename_map: dict[str, str] = {}
 
         for node in modified_graph.nodes:
             if "name" in node.data:
                 old_name = node.data["name"]
-                node.data["name"] = f"{old_name}_{pipeline_index}_{stream_index}"
+                new_name = f"{old_name}_{pipeline_index}_{stream_index}"
+                node.data["name"] = new_name
+                rename_map[old_name] = new_name
                 logger.debug(
                     f"Unified element name in node {node.id}: {old_name} -> {node.data['name']}"
+                )
+
+        if rename_map:
+            for node in modified_graph.nodes:
+                prefix, sep, suffix = node.type.partition(".")
+                if not sep or not prefix or not suffix:
+                    continue
+
+                renamed_prefix = rename_map.get(prefix)
+                if not renamed_prefix:
+                    continue
+
+                old_type = node.type
+                node.type = f"{renamed_prefix}.{suffix}"
+                logger.debug(
+                    f"Unified pad reference in node {node.id}: {old_type} -> {node.type}"
                 )
 
         return modified_graph
@@ -3893,6 +3918,17 @@ def _add_property_to_last_node(nodes: list[Node], token: _Token) -> None:
     logger.debug(f"Added property to node {nodes[-1].id}: {key}={value}")
 
 
+def _is_named_pad_reference(node_type: str) -> bool:
+    """Return True for GStreamer named pad references like 'demux.audio_0'."""
+    return bool(re.match(r"^[A-Za-z0-9_]+\.[A-Za-z0-9_]+$", node_type))
+
+
+def _named_pad_reference_prefix(node_type: str) -> str | None:
+    """Return the element-name prefix of a named pad reference or None."""
+    match = re.match(r"^([A-Za-z0-9_]+)\.[A-Za-z0-9_]+$", node_type)
+    return match.group(1) if match else None
+
+
 def _build_chain(
     start_id: str,
     node_by_id: dict[str, Node],
@@ -4000,22 +4036,64 @@ def _build_chain(
             # No outgoing edges – end of this chain.
             break
 
-        # Separate elements/caps in the chain with '!'.
-        result_parts.append("!")
-
         if len(targets) == 1:
             # Simple linear chain.
+            next_node = node_by_id.get(targets[0])
+            # Keep named pad routing tokens in the same segment. Emitting '!'
+            # between two pad references creates an invalid linear link such as
+            # 'smux.audio_0 ! demux.video_0'.
+            next_is_named_pad_ref = bool(
+                next_node and _is_named_pad_reference(next_node.type)
+            )
+            use_space_separator = bool(
+                # Case 1: pad_ref -> pad_ref
+                next_node
+                and _is_named_pad_reference(node.type)
+                and next_is_named_pad_ref
+            )
+            if not use_space_separator and next_is_named_pad_ref:
+                # Case 2: named element declaration -> matching pad reference
+                # Example: "qtdemux name=demux" followed by "demux.audio_0"
+                # should be rendered in the same segment without '!'.
+                node_name = node.data.get("name")
+                next_prefix = _named_pad_reference_prefix(next_node.type)
+                use_space_separator = bool(node_name and next_prefix == node_name)
+
+            if not use_space_separator:
+                result_parts.append("!")
             current_id = targets[0]
         else:
-            # Tee: follow the first branch inline, then render additional branches.
+            # Separate elements/caps in branched chains. For named elements
+            # that fan out to pad references, keep declaration + first pad in
+            # the same segment (space), e.g. "qtdemux name=demux demux.audio_0".
+            first_target_node = node_by_id.get(targets[0])
+            first_target_prefix = (
+                _named_pad_reference_prefix(first_target_node.type)
+                if first_target_node
+                else None
+            )
+            if (
+                node.data.get("name")
+                and first_target_prefix == node.data.get("name")
+            ):
+                pass
+            else:
+                result_parts.append("!")
+            # Multi-target split: render the first branch inline.
+            # For tee nodes, render additional branches with '<tee_name>. !'.
+            # For non-tee nodes (for example demux-like fan-out represented in
+            # graph form), continue with branch heads directly to avoid invalid
+            # synthetic tee markers like 't. ! t. !'.
+            split_node = node
             _build_chain(
                 targets[0], node_by_id, edges_from, tee_names, visited, result_parts
             )
 
             for target_id in targets[1:]:
-                tee_name = tee_names.get(current_id, "t")
-                result_parts.append(f"{tee_name}.")
-                result_parts.append("!")
+                if split_node.type == "tee":
+                    tee_name = tee_names.get(current_id, "t")
+                    result_parts.append(f"{tee_name}.")
+                    result_parts.append("!")
                 _build_chain(
                     target_id,
                     node_by_id,

@@ -3433,6 +3433,92 @@ class TestParseDescription(unittest.TestCase):
 
         self.assertIn("TEE_END without corresponding tee element", str(cm.exception))
 
+    def test_multi_type_segment_assigns_unique_node_ids(self):
+        """
+        A single segment can contain multiple TYPE tokens, for example
+        "qtdemux name=demux demux.audio_0". Each TYPE token must become a
+        distinct node with a unique ID.
+        """
+        pipeline = "filesrc ! qtdemux name=demux demux.audio_0 ! queue ! fakesink"
+        result = Graph.from_pipeline_description(pipeline)
+
+        self.assertEqual(
+            [node.id for node in result.nodes], [str(i) for i in range(len(result.nodes))]
+        )
+        self.assertEqual(result.nodes[1].type, "qtdemux")
+        self.assertEqual(result.nodes[1].data.get("name"), "demux")
+        self.assertEqual(result.nodes[2].type, "demux.audio_0")
+
+    def test_forward_order_named_pad_references_do_not_fail_parse(self):
+        """
+        Pad-like tokens such as demux.audio_0 or smux.audio_0 may appear
+        before their named element declaration in user-authored descriptions.
+        Parsing should not fail early when this ordering is used.
+        """
+        pipeline = (
+            "filesrc ! demux.audio_0 ! queue ! smux.audio_0 ! "
+            "qtdemux name=demux ! splitmuxsink name=smux"
+        )
+
+        result = Graph.from_pipeline_description(pipeline)
+
+        self.assertGreaterEqual(len(result.nodes), 6)
+        self.assertTrue(any(node.type == "demux.audio_0" for node in result.nodes))
+        self.assertTrue(any(node.type == "smux.audio_0" for node in result.nodes))
+        self.assertTrue(
+            any(node.type == "qtdemux" and node.data.get("name") == "demux" for node in result.nodes)
+        )
+        self.assertTrue(
+            any(
+                node.type == "splitmuxsink" and node.data.get("name") == "smux"
+                for node in result.nodes
+            )
+        )
+
+    @patch("graph.VideosManager")
+    def test_non_tee_fanout_does_not_emit_synthetic_tee_markers(
+        self, mock_videos_cls
+    ):
+        """
+        Non-tee nodes can fan out in graph form (for example demux-like splits).
+        Serialization must not invent tee markers such as "t." for these nodes.
+        """
+        mock_videos_cls.return_value = mock_videos_manager_instance
+
+        graph = Graph(
+            nodes=[
+                Node(id="0", type="filesrc", data={"location": "test.mp4"}),
+                Node(id="1", type="qtdemux", data={"name": "demux"}),
+                Node(id="2", type="demux.audio_0", data={}),
+                Node(id="3", type="queue", data={}),
+                Node(id="4", type="smux.audio_0", data={}),
+                Node(id="5", type="demux.video_0", data={}),
+                Node(id="6", type="queue", data={}),
+                Node(id="7", type="fakesink", data={}),
+            ],
+            edges=[
+                Edge(id="0", source="0", target="1"),
+                Edge(id="1", source="1", target="2"),
+                Edge(id="2", source="2", target="3"),
+                Edge(id="3", source="3", target="4"),
+                Edge(id="4", source="1", target="5"),
+                Edge(id="5", source="5", target="6"),
+                Edge(id="6", source="6", target="7"),
+            ],
+        )
+
+        serialized = graph.to_pipeline_description()
+
+        self.assertIn("qtdemux", serialized)
+        self.assertIn("demux.audio_0", serialized)
+        self.assertIn("demux.video_0", serialized)
+        self.assertRegex(serialized, r"qtdemux\s+name=demux\s+demux\.audio_0")
+        self.assertNotRegex(serialized, r"qtdemux\s+name=demux\s*!\s*demux\.audio_0")
+        self.assertRegex(serialized, r"smux\.audio_0\s+demux\.video_0")
+        self.assertNotIn("smux.audio_0 ! demux.video_0", serialized)
+        self.assertNotIn(" t. ", serialized)
+        self.assertNotIn(" t. ! t. !", serialized)
+
 
 class TestNegativeCases(unittest.TestCase):
     @patch("graph.VideosManager")
@@ -5831,6 +5917,37 @@ class TestApplyStreamIdentifiers(unittest.TestCase):
         # Original graph is not mutated (deep copy semantics).
         self.assertNotIn("name", graph.nodes[0].data)
         self.assertNotIn("name", graph.nodes[2].data)
+
+
+class TestUnifyAllElementNames(unittest.TestCase):
+    """Test cases for Graph.unify_all_element_names method."""
+
+    def test_named_pad_references_follow_renamed_elements(self):
+        """
+        When element names are suffixed for stream uniqueness, pad references
+        encoded as node types (<name>.<pad>) must be rewritten to the suffixed
+        name as well.
+        """
+        graph = Graph(
+            nodes=[
+                Node(id="0", type="qtdemux", data={"name": "demux"}),
+                Node(id="1", type="demux.audio_0", data={}),
+                Node(id="2", type="splitmuxsink", data={"name": "smux"}),
+                Node(id="3", type="smux.audio_0", data={}),
+                Node(id="4", type="tee", data={"name": "video_tee"}),
+                Node(id="5", type="video_tee.src_0", data={}),
+            ],
+            edges=[],
+        )
+
+        result = graph.unify_all_element_names(0, 0)
+
+        self.assertEqual(result.nodes[0].data["name"], "demux_0_0")
+        self.assertEqual(result.nodes[1].type, "demux_0_0.audio_0")
+        self.assertEqual(result.nodes[2].data["name"], "smux_0_0")
+        self.assertEqual(result.nodes[3].type, "smux_0_0.audio_0")
+        self.assertEqual(result.nodes[4].data["name"], "video_tee_0_0")
+        self.assertEqual(result.nodes[5].type, "video_tee_0_0.src_0")
 
     def test_tee_branch_sinks_are_not_renamed(self):
         """Only the main-branch terminal sink is named; tee-branch sinks stay untouched."""
